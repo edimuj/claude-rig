@@ -10,6 +10,121 @@ import (
 	"syscall"
 )
 
+// cmdSetArgs sets default launch arguments globally or per-profile.
+func cmdSetArgs(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: claude-rig set-args [profile] <flags...>\n  Global: claude-rig set-args -- --dangerously-skip-permissions\n  Profile: claude-rig set-args minimal -- --dangerously-skip-permissions")
+	}
+
+	// Check if first arg is a profile name or a flag
+	dir, profileName, flagArgs := resolveArgsTarget(args)
+	if dir == "" {
+		return fmt.Errorf("could not determine target directory")
+	}
+
+	argsStr := strings.Join(flagArgs, " ")
+	file := filepath.Join(dir, "default-args")
+
+	if len(flagArgs) == 0 {
+		// Clear args
+		os.Remove(file)
+		if profileName != "" {
+			fmt.Printf("Cleared default args for profile %q\n", profileName)
+		} else {
+			fmt.Println("Cleared global default args")
+		}
+		return nil
+	}
+
+	if err := os.WriteFile(file, []byte(argsStr+"\n"), 0644); err != nil {
+		return fmt.Errorf("writing default-args: %w", err)
+	}
+
+	if profileName != "" {
+		fmt.Printf("Profile %q default args: %s\n", profileName, argsStr)
+	} else {
+		fmt.Printf("Global default args: %s\n", argsStr)
+	}
+	return nil
+}
+
+// cmdShowArgs shows default launch arguments.
+func cmdShowArgs(args []string) error {
+	rig, _ := rigHome()
+
+	// Show global
+	globalArgs := loadLaunchArgs(rig)
+	if globalArgs != nil {
+		fmt.Printf("Global:  %s\n", strings.Join(globalArgs, " "))
+	} else {
+		fmt.Println("Global:  (none)")
+	}
+
+	// If profile specified, show just that one
+	if len(args) > 0 {
+		dir, err := profileDir(args[0])
+		if err != nil {
+			return err
+		}
+		profileArgs := loadLaunchArgs(dir)
+		if profileArgs != nil {
+			fmt.Printf("Profile %q: %s\n", args[0], strings.Join(profileArgs, " "))
+		} else {
+			fmt.Printf("Profile %q: (inherits global)\n", args[0])
+		}
+		return nil
+	}
+
+	// Show all profiles
+	root, _ := profilesRoot()
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dir, _ := profileDir(e.Name())
+		profileArgs := loadLaunchArgs(dir)
+		if profileArgs != nil {
+			fmt.Printf("  %-20s %s\n", e.Name()+":", strings.Join(profileArgs, " "))
+		}
+	}
+	return nil
+}
+
+// resolveArgsTarget figures out if the user is setting global or per-profile args.
+func resolveArgsTarget(args []string) (dir string, profileName string, flagArgs []string) {
+	// If first arg starts with - or is --, it's global
+	if args[0] == "--" || strings.HasPrefix(args[0], "-") {
+		rig, _ := rigHome()
+		// Skip leading -- separator if present
+		flags := args
+		if args[0] == "--" {
+			flags = args[1:]
+		}
+		return rig, "", flags
+	}
+
+	// First arg is a profile name
+	profileName = args[0]
+	d, err := profileDir(profileName)
+	if err != nil {
+		return "", "", nil
+	}
+	if _, err := os.Stat(d); os.IsNotExist(err) {
+		return "", "", nil
+	}
+
+	flags := args[1:]
+	// Skip -- separator if present
+	if len(flags) > 0 && flags[0] == "--" {
+		flags = flags[1:]
+	}
+	return d, profileName, flags
+}
+
 // cmdDoctor checks the health of the profile system.
 func cmdDoctor() error {
 	issues := 0
@@ -126,6 +241,7 @@ func cmdDoctor() error {
 // %s is replaced with any extra default flags from an existing alias.
 const shellWrapperTemplate = `
 # claude-rig: --rig flag support
+unalias claude 2>/dev/null
 claude() {
   for arg in "$@"; do
     if [[ "$arg" == --rig=* ]]; then
@@ -542,7 +658,7 @@ func cmdLinkAuth(args []string) error {
 	return nil
 }
 
-// cmdUnlinkAuth removes shared auth symlinks from a profile.
+// cmdUnlinkAuth removes shared auth from a profile so it gets fresh onboarding.
 func cmdUnlinkAuth(args []string) error {
 	if len(args) < 1 {
 		return fmt.Errorf("usage: claude-rig unlink-auth <name>")
@@ -564,18 +680,25 @@ func cmdUnlinkAuth(args []string) error {
 		if err != nil {
 			continue
 		}
-		if info.Mode()&os.ModeSymlink == 0 {
-			continue // not a symlink, leave it alone
+		if info.Mode()&os.ModeSymlink != 0 {
+			os.Remove(linkPath)
+			fmt.Printf("Removed symlink: %s\n", item)
+			removed++
+		} else if item == ".claude.json" {
+			// Real file — remove it so Claude starts fresh
+			os.Remove(linkPath)
+			fmt.Printf("Removed: %s\n", item)
+			removed++
 		}
-		os.Remove(linkPath)
-		fmt.Printf("Removed %s\n", item)
-		removed++
 	}
 
+	// Clean up backup files that cache account data
+	cleanAuthBackups(dir)
+
 	if removed == 0 {
-		fmt.Printf("Profile %q has no shared auth links\n", name)
+		fmt.Printf("Profile %q has no shared auth to remove\n", name)
 	} else {
-		fmt.Printf("Profile %q will use its own auth on next launch\n", name)
+		fmt.Printf("Profile %q will get fresh onboarding on next launch\n", name)
 	}
 	return nil
 }
@@ -793,11 +916,19 @@ func cmdLaunch(args []string) error {
 		return fmt.Errorf("claude binary not found: %w (set CLAUDE_BINARY to override)", err)
 	}
 
+	// Load default args: per-profile takes precedence, then global
+	defaultArgs := loadLaunchArgs(dir)
+	if defaultArgs == nil {
+		rig, _ := rigHome()
+		defaultArgs = loadLaunchArgs(rig)
+	}
+
 	// Replace this process with claude, passing the config dir via env
 	env := os.Environ()
 	env = setEnv(env, "CLAUDE_CONFIG_DIR", dir)
 
-	execArgs := append([]string{binary}, extraArgs...)
+	execArgs := append([]string{binary}, defaultArgs...)
+	execArgs = append(execArgs, extraArgs...)
 	return syscall.Exec(binPath, execArgs, env)
 }
 
@@ -825,14 +956,49 @@ func linkAuthFiles(profileDir string) error {
 			continue
 		}
 		linkPath := filepath.Join(profileDir, item)
-		if _, err := os.Lstat(linkPath); err == nil {
-			continue
+		if info, err := os.Lstat(linkPath); err == nil {
+			if info.Mode()&os.ModeSymlink != 0 {
+				dest, _ := os.Readlink(linkPath)
+				if dest == target {
+					continue // already linked correctly
+				}
+			}
+			// Remove existing file/symlink to replace with correct link
+			os.RemoveAll(linkPath)
 		}
 		if err := os.Symlink(target, linkPath); err != nil {
 			return fmt.Errorf("symlinking %s: %w", item, err)
 		}
 	}
+
+	// Clean up .claude.json backups that may hold stale auth data
+	cleanAuthBackups(profileDir)
 	return nil
+}
+
+// loadLaunchArgs reads default launch arguments from a directory's .launch-args file.
+func loadLaunchArgs(dir string) []string {
+	data, err := os.ReadFile(filepath.Join(dir, "default-args"))
+	if err != nil {
+		return nil
+	}
+	line := strings.TrimSpace(string(data))
+	if line == "" {
+		return nil
+	}
+	return strings.Fields(line)
+}
+
+func cleanAuthBackups(profileDir string) {
+	entries, err := os.ReadDir(profileDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".claude.json.backup.") {
+			os.Remove(filepath.Join(profileDir, e.Name()))
+		}
+	}
 }
 
 func syncSharedSymlinks(profileDir string) error {

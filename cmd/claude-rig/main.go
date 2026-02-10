@@ -51,6 +51,10 @@ func main() {
 		err = cmdUnlinkAuth(args)
 	case "init":
 		err = cmdInit()
+	case "set-args":
+		err = cmdSetArgs(args)
+	case "show-args":
+		err = cmdShowArgs(args)
 	case "doctor":
 		err = cmdDoctor()
 	case "version", "--version", "-v":
@@ -86,6 +90,8 @@ Commands:
   current                 Show the currently active profile
   delete <name>           Delete a profile
   launch <name> [args]    Launch Claude Code with a specific profile
+  set-args [name] <args>  Set default launch args (global if no name, per-profile if given)
+  show-args [name]        Show default launch args
   doctor                  Check profiles for broken symlinks and missing items
   init                    Initialize profile system (run once)
   version                 Show version
