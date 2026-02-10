@@ -16,3 +16,6 @@ dist/
 
 # Private dev notes
 .private/
+
+# Project instructions (personal)
+CLAUDE.md
