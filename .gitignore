@@ -1,0 +1,18 @@
+# Binary
+claude-rig
+
+# IDE
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build
+dist/
+
+# Private dev notes
+.private/

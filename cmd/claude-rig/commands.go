@@ -1,0 +1,313 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"syscall"
+)
+
+// cmdInit sets up the profile system directory structure.
+func cmdInit() error {
+	root, err := profilesRoot()
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(root, 0755); err != nil {
+		return fmt.Errorf("creating profiles root: %w", err)
+	}
+
+	fmt.Printf("Initialized profile system at %s\n", root)
+	fmt.Println("Next: claude-rig create <name>")
+	return nil
+}
+
+// cmdCreate creates a new profile directory with profile-specific items
+// and symlinks to shared items in ~/.claude/.
+func cmdCreate(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: claude-rig create <name>")
+	}
+	name := args[0]
+
+	if err := validateProfileName(name); err != nil {
+		return err
+	}
+
+	dir, err := profileDir(name)
+	if err != nil {
+		return err
+	}
+
+	if _, err := os.Stat(dir); err == nil {
+		return fmt.Errorf("profile %q already exists", name)
+	}
+
+	root, err := profilesRoot()
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(root); os.IsNotExist(err) {
+		return fmt.Errorf("profile system not initialized — run: claude-rig init")
+	}
+
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("creating profile directory: %w", err)
+	}
+
+	// Create profile-specific directories
+	for _, item := range profileSpecificItems {
+		path := filepath.Join(dir, item)
+		if strings.HasSuffix(item, ".json") {
+			// Create empty JSON files
+			if err := os.WriteFile(path, []byte("{}\n"), 0644); err != nil {
+				return fmt.Errorf("creating %s: %w", item, err)
+			}
+		} else {
+			// Create directories
+			if err := os.MkdirAll(path, 0755); err != nil {
+				return fmt.Errorf("creating %s/: %w", item, err)
+			}
+		}
+	}
+
+	// Symlink shared items from ~/.claude/
+	if err := syncSharedSymlinks(dir); err != nil {
+		return fmt.Errorf("creating shared symlinks: %w", err)
+	}
+
+	fmt.Printf("Created profile %q at %s\n", name, dir)
+	fmt.Printf("Launch with: claude-rig launch %s\n", name)
+	return nil
+}
+
+// cmdList shows all profiles and marks the active one.
+func cmdList() error {
+	root, err := profilesRoot()
+	if err != nil {
+		return err
+	}
+
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Println("No profiles found. Run: claude-rig init")
+			return nil
+		}
+		return err
+	}
+
+	active := getActiveProfile()
+
+	found := false
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		found = true
+		marker := "  "
+		if e.Name() == active {
+			marker = "* "
+		}
+		fmt.Printf("%s%s\n", marker, e.Name())
+	}
+
+	if !found {
+		fmt.Println("No profiles found. Run: claude-rig create <name>")
+	}
+	return nil
+}
+
+// cmdUse sets the active profile (for shell alias workflows).
+func cmdUse(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: claude-rig use <name>")
+	}
+	name := args[0]
+
+	dir, err := profileDir(name)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return fmt.Errorf("profile %q does not exist", name)
+	}
+
+	file, err := activeProfileFile()
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(file, []byte(name), 0644); err != nil {
+		return fmt.Errorf("writing active profile: %w", err)
+	}
+
+	fmt.Printf("Active profile: %s\n", name)
+	fmt.Printf("Launch with: CLAUDE_CONFIG_DIR=%s claude\n", dir)
+	return nil
+}
+
+// cmdCurrent shows the active profile.
+func cmdCurrent() error {
+	active := getActiveProfile()
+	if active == "" {
+		fmt.Println("No active profile set. Use: claude-rig use <name>")
+	} else {
+		fmt.Println(active)
+	}
+	return nil
+}
+
+// cmdDelete removes a profile directory.
+func cmdDelete(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: claude-rig delete <name>")
+	}
+	name := args[0]
+
+	dir, err := profileDir(name)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return fmt.Errorf("profile %q does not exist", name)
+	}
+
+	fmt.Printf("Delete profile %q and all its settings/skills/plugins? [y/N] ", name)
+	var confirm string
+	fmt.Scanln(&confirm)
+	if strings.ToLower(confirm) != "y" {
+		fmt.Println("Cancelled.")
+		return nil
+	}
+
+	// Only remove real files, not symlink targets
+	if err := os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("removing profile: %w", err)
+	}
+
+	// Clear active if this was it
+	if getActiveProfile() == name {
+		file, _ := activeProfileFile()
+		os.Remove(file)
+	}
+
+	fmt.Printf("Deleted profile %q\n", name)
+	return nil
+}
+
+// cmdLaunch starts Claude Code with the specified profile's config dir.
+func cmdLaunch(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: claude-rig launch <name> [claude-args...]")
+	}
+	name := args[0]
+	extraArgs := args[1:]
+
+	dir, err := profileDir(name)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return fmt.Errorf("profile %q does not exist", name)
+	}
+
+	// Refresh shared symlinks in case new files appeared in ~/.claude/
+	if err := syncSharedSymlinks(dir); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not sync shared symlinks: %v\n", err)
+	}
+
+	// Set active profile marker
+	file, _ := activeProfileFile()
+	os.WriteFile(file, []byte(name), 0644)
+
+	binary := claudeCodeBinary()
+	binPath, err := exec.LookPath(binary)
+	if err != nil {
+		return fmt.Errorf("claude binary not found: %w (set CLAUDE_BINARY to override)", err)
+	}
+
+	// Replace this process with claude, passing the config dir via env
+	env := os.Environ()
+	env = setEnv(env, "CLAUDE_CONFIG_DIR", dir)
+
+	execArgs := append([]string{binary}, extraArgs...)
+	return syscall.Exec(binPath, execArgs, env)
+}
+
+// --- helpers ---
+
+func syncSharedSymlinks(profileDir string) error {
+	home, err := claudeHome()
+	if err != nil {
+		return err
+	}
+
+	entries, err := os.ReadDir(home)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // ~/.claude/ doesn't exist yet, nothing to link
+		}
+		return err
+	}
+
+	for _, e := range entries {
+		name := e.Name()
+
+		// Skip profile-specific items and hidden files
+		if isProfileSpecific(name) || strings.HasPrefix(name, ".") {
+			continue
+		}
+
+		linkPath := filepath.Join(profileDir, name)
+		target := filepath.Join(home, name)
+
+		// Skip if something already exists at this path
+		if _, err := os.Lstat(linkPath); err == nil {
+			continue
+		}
+
+		if err := os.Symlink(target, linkPath); err != nil {
+			return fmt.Errorf("symlinking %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+func getActiveProfile() string {
+	file, err := activeProfileFile()
+	if err != nil {
+		return ""
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func validateProfileName(name string) error {
+	if name == "" {
+		return fmt.Errorf("profile name cannot be empty")
+	}
+	if strings.ContainsAny(name, "/\\. ") {
+		return fmt.Errorf("profile name cannot contain slashes, dots, or spaces")
+	}
+	if strings.HasPrefix(name, "-") {
+		return fmt.Errorf("profile name cannot start with a dash")
+	}
+	return nil
+}
+
+func setEnv(env []string, key, value string) []string {
+	prefix := key + "="
+	for i, e := range env {
+		if strings.HasPrefix(e, prefix) {
+			env[i] = prefix + value
+			return env
+		}
+	}
+	return append(env, prefix+value)
+}
