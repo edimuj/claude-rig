@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/claude-rig-raccoon-256.png" alt="claude-rig mascot" width="180" />
+</p>
+
 # claude-rig
 
 Manage multiple Claude Code configuration profiles with full isolation for concurrent use.
