@@ -43,6 +43,8 @@ func main() {
 		err = cmdDelete(args)
 	case "launch":
 		err = cmdLaunch(args)
+	case "clone":
+		err = cmdClone(args)
 	case "link-auth":
 		err = cmdLinkAuth(args)
 	case "unlink-auth":
@@ -74,6 +76,7 @@ Usage:
 Commands:
   create <name>           Create a new profile
     --link-auth            Symlink auth from existing ~/.claude/ (skip onboarding)
+  clone <src> <dest>      Clone a profile (copies settings, preserves symlinks)
   link-auth <name>        Link existing profile to shared auth from ~/.claude/
   unlink-auth <name>      Remove shared auth, profile will use its own
   list                    List all profiles and show active one

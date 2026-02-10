@@ -105,6 +105,92 @@ func cmdCreate(args []string) error {
 	return nil
 }
 
+// cmdClone duplicates a profile. Symlinks are recreated, real files are copied.
+func cmdClone(args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: claude-rig clone <source> <dest>")
+	}
+	srcName, destName := args[0], args[1]
+
+	if err := validateProfileName(destName); err != nil {
+		return err
+	}
+
+	srcDir, err := profileDir(srcName)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(srcDir); os.IsNotExist(err) {
+		return fmt.Errorf("profile %q does not exist", srcName)
+	}
+
+	destDir, err := profileDir(destName)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(destDir); err == nil {
+		return fmt.Errorf("profile %q already exists", destName)
+	}
+
+	if err := cloneDir(srcDir, destDir); err != nil {
+		os.RemoveAll(destDir) // clean up partial clone
+		return fmt.Errorf("cloning profile: %w", err)
+	}
+
+	fmt.Printf("Cloned %q → %q\n", srcName, destName)
+	fmt.Printf("Launch with: claude-rig launch %s\n", destName)
+	return nil
+}
+
+// cloneDir recursively copies a directory. Symlinks are recreated, files are copied.
+func cloneDir(src, dest string) error {
+	if err := os.MkdirAll(dest, 0755); err != nil {
+		return err
+	}
+
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+
+	for _, e := range entries {
+		srcPath := filepath.Join(src, e.Name())
+		destPath := filepath.Join(dest, e.Name())
+
+		info, err := os.Lstat(srcPath)
+		if err != nil {
+			return err
+		}
+
+		if info.Mode()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(srcPath)
+			if err != nil {
+				return err
+			}
+			if err := os.Symlink(target, destPath); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if info.IsDir() {
+			if err := cloneDir(srcPath, destPath); err != nil {
+				return err
+			}
+			continue
+		}
+
+		data, err := os.ReadFile(srcPath)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(destPath, data, info.Mode()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // cmdLinkAuth links shared auth files into an existing profile.
 func cmdLinkAuth(args []string) error {
 	if len(args) < 1 {

@@ -79,6 +79,7 @@ claude-rig launch minimal
 |---|---|
 | `init` | Initialize the profile system (`~/.claude-rig/profiles/`) |
 | `create <name>` | Create a new profile (`--link-auth` to reuse existing auth) |
+| `clone <src> <dest>` | Clone a profile (copies settings, preserves symlinks) |
 | `link-auth <name>` | Link existing profile to shared auth from `~/.claude/` |
 | `unlink-auth <name>` | Remove shared auth, profile will use its own |
 | `list` | List all profiles, mark active one |
