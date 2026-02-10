@@ -122,7 +122,21 @@ func cmdDoctor() error {
 	return nil
 }
 
-// cmdInit sets up the profile system directory structure.
+// shellWrapper is the function added to shell rc files for --rig support.
+const shellWrapper = `
+# claude-rig: --rig flag support
+claude() {
+  for arg in "$@"; do
+    if [[ "$arg" == --rig=* ]]; then
+      claude-rig launch "${arg#--rig=}" "${@//$arg/}"
+      return
+    fi
+  done
+  command claude "$@"
+}
+`
+
+// cmdInit sets up the profile system directory structure and shell integration.
 func cmdInit() error {
 	root, err := profilesRoot()
 	if err != nil {
@@ -135,8 +149,72 @@ func cmdInit() error {
 
 	rig, _ := rigHome()
 	fmt.Printf("Initialized profile system at %s\n", rig)
-	fmt.Println("Next: claude-rig create <name>")
+
+	// Shell integration
+	rcFile := detectShellRC()
+	if rcFile == "" {
+		fmt.Println("Could not detect shell rc file — add the claude wrapper function manually.")
+		fmt.Println("See: claude-rig help")
+	} else if hasShellIntegration(rcFile) {
+		fmt.Printf("Shell integration already present in %s\n", rcFile)
+	} else {
+		fmt.Printf("Add claude --rig wrapper to %s? [Y/n] ", rcFile)
+		var confirm string
+		fmt.Scanln(&confirm)
+		if confirm == "" || strings.ToLower(confirm) == "y" {
+			if err := installShellIntegration(rcFile); err != nil {
+				return fmt.Errorf("adding shell integration: %w", err)
+			}
+			fmt.Printf("Added to %s — restart your shell or run: source %s\n", rcFile, rcFile)
+		}
+	}
+
+	fmt.Println("\nNext: claude-rig create <name>")
 	return nil
+}
+
+func detectShellRC() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+
+	shell := os.Getenv("SHELL")
+	switch {
+	case strings.HasSuffix(shell, "/zsh"):
+		return filepath.Join(home, ".zshrc")
+	case strings.HasSuffix(shell, "/bash"):
+		// Prefer .bashrc, fall back to .bash_profile on macOS
+		bashrc := filepath.Join(home, ".bashrc")
+		if _, err := os.Stat(bashrc); err == nil {
+			return bashrc
+		}
+		profile := filepath.Join(home, ".bash_profile")
+		if _, err := os.Stat(profile); err == nil {
+			return profile
+		}
+		return bashrc
+	default:
+		return ""
+	}
+}
+
+func hasShellIntegration(rcFile string) bool {
+	data, err := os.ReadFile(rcFile)
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(data), "claude-rig")
+}
+
+func installShellIntegration(rcFile string) error {
+	f, err := os.OpenFile(rcFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.WriteString(shellWrapper)
+	return err
 }
 
 // cmdCreate creates a new profile directory with profile-specific items
