@@ -122,8 +122,9 @@ func cmdDoctor() error {
 	return nil
 }
 
-// shellWrapper is the function added to shell rc files for --rig support.
-const shellWrapper = `
+// shellWrapperTemplate is the function added to shell rc files for --rig support.
+// %s is replaced with any extra default flags from an existing alias.
+const shellWrapperTemplate = `
 # claude-rig: --rig flag support
 claude() {
   for arg in "$@"; do
@@ -132,7 +133,7 @@ claude() {
       return
     fi
   done
-  command claude "$@"
+  command claude%s "$@"
 }
 `
 
@@ -208,13 +209,51 @@ func hasShellIntegration(rcFile string) bool {
 }
 
 func installShellIntegration(rcFile string) error {
-	f, err := os.OpenFile(rcFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
+	data, err := os.ReadFile(rcFile)
+	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	defer f.Close()
-	_, err = f.WriteString(shellWrapper)
-	return err
+
+	// Detect existing claude alias and extract its flags
+	extraFlags := ""
+	lines := strings.Split(string(data), "\n")
+	var newLines []string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if aliasFlags := parseClaudeAlias(trimmed); aliasFlags != "" {
+			extraFlags = " " + aliasFlags
+			fmt.Printf("Found existing alias: %s\n", trimmed)
+			fmt.Printf("Folding flags into wrapper: %s\n", aliasFlags)
+			// Comment out the old alias
+			newLines = append(newLines, "# "+line+" # replaced by claude-rig wrapper")
+		} else {
+			newLines = append(newLines, line)
+		}
+	}
+
+	wrapper := fmt.Sprintf(shellWrapperTemplate, extraFlags)
+	output := strings.Join(newLines, "\n") + wrapper
+
+	return os.WriteFile(rcFile, []byte(output), 0644)
+}
+
+// parseClaudeAlias extracts flags from an alias like: alias claude='claude --flag1 --flag2'
+func parseClaudeAlias(line string) string {
+	// Match: alias claude='claude ...' or alias claude="claude ..."
+	for _, prefix := range []string{
+		`alias claude='claude `,
+		`alias claude="claude `,
+	} {
+		if strings.HasPrefix(line, prefix) {
+			// Strip prefix and trailing quote
+			rest := line[len(prefix):]
+			if len(rest) > 0 {
+				rest = rest[:len(rest)-1] // remove closing ' or "
+			}
+			return strings.TrimSpace(rest)
+		}
+	}
+	return ""
 }
 
 // cmdCreate creates a new profile directory with profile-specific items
