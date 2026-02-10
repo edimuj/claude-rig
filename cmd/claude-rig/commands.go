@@ -17,10 +17,11 @@ func cmdInit() error {
 	}
 
 	if err := os.MkdirAll(root, 0755); err != nil {
-		return fmt.Errorf("creating profiles root: %w", err)
+		return fmt.Errorf("creating profiles directory: %w", err)
 	}
 
-	fmt.Printf("Initialized profile system at %s\n", root)
+	rig, _ := rigHome()
+	fmt.Printf("Initialized profile system at %s\n", rig)
 	fmt.Println("Next: claude-rig create <name>")
 	return nil
 }

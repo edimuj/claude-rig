@@ -6,7 +6,7 @@ Run `claude --rig minimal` in one terminal and `claude --rig webappdev` in anoth
 
 ## How It Works
 
-Each profile gets its own config directory under `~/.claude-profiles/`. Profile-specific files (settings, skills, plugins, agents, commands, hooks, MCP config) live as real files in the profile directory. Shared files (CLAUDE.md, credentials, sessions, todos) are symlinked back to `~/.claude/`, so all profiles share authentication and memory.
+Each profile gets its own config directory under `~/.claude-rig/profiles/`. Profile-specific files (settings, skills, plugins, agents, commands, hooks, MCP config) live as real files in the profile directory. Shared files (CLAUDE.md, credentials, sessions, todos) are symlinked back to `~/.claude/`, so all profiles share authentication and memory.
 
 ```
 ~/.claude/                          # Canonical home (shared)
@@ -14,8 +14,10 @@ Each profile gets its own config directory under `~/.claude-profiles/`. Profile-
     credentials.json                # Auth — shared
     sessions/                       # History — shared
 
-~/.claude-profiles/
-    minimal/
+~/.claude-rig/
+    .active                             # Current profile marker
+    profiles/
+        minimal/
         settings.json               # Profile-specific
         skills/                     # Profile-specific
         plugins/                    # Profile-specific
@@ -31,7 +33,7 @@ Each profile gets its own config directory under `~/.claude-profiles/`. Profile-
 ## Install
 
 ```bash
-go install github.com/edimuj/claude-rig@latest
+go install github.com/edimuj/claude-rig/cmd/claude-rig@latest
 ```
 
 Or build from source:
@@ -63,7 +65,7 @@ claude-rig launch minimal
 
 | Command | Description |
 |---|---|
-| `init` | Initialize the profile system (`~/.claude-profiles/`) |
+| `init` | Initialize the profile system (`~/.claude-rig/profiles/`) |
 | `create <name>` | Create a new profile |
 | `list` | List all profiles, mark active one |
 | `use <name>` | Set the active profile |

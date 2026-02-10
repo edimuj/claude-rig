@@ -34,12 +34,20 @@ func claudeHome() (string, error) {
 	return filepath.Join(home, ".claude"), nil
 }
 
-func profilesRoot() (string, error) {
+func rigHome() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".claude-profiles"), nil
+	return filepath.Join(home, ".claude-rig"), nil
+}
+
+func profilesRoot() (string, error) {
+	rig, err := rigHome()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(rig, "profiles"), nil
 }
 
 func profileDir(name string) (string, error) {
@@ -51,11 +59,11 @@ func profileDir(name string) (string, error) {
 }
 
 func activeProfileFile() (string, error) {
-	root, err := profilesRoot()
+	rig, err := rigHome()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(root, ".active"), nil
+	return filepath.Join(rig, ".active"), nil
 }
 
 func isProfileSpecific(name string) bool {
