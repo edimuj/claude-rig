@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -8,6 +9,118 @@ import (
 	"strings"
 	"syscall"
 )
+
+// cmdDoctor checks the health of the profile system.
+func cmdDoctor() error {
+	issues := 0
+	warn := func(format string, args ...any) {
+		issues++
+		fmt.Printf("  ✗ "+format+"\n", args...)
+	}
+	ok := func(format string, args ...any) {
+		fmt.Printf("  ✓ "+format+"\n", args...)
+	}
+
+	// Check ~/.claude/ exists
+	fmt.Println("System:")
+	home, err := claudeHome()
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(home); os.IsNotExist(err) {
+		warn("Claude config not found: %s", home)
+	} else {
+		ok("Claude config: %s", home)
+	}
+
+	// Check ~/.claude-rig/ exists
+	rig, err := rigHome()
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(rig); os.IsNotExist(err) {
+		warn("Not initialized: %s (run: claude-rig init)", rig)
+		return nil
+	}
+	ok("Rig home: %s", rig)
+
+	// Check active profile
+	active := getActiveProfile()
+	if active != "" {
+		dir, _ := profileDir(active)
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			warn("Active profile %q does not exist", active)
+		} else {
+			ok("Active profile: %s", active)
+		}
+	}
+
+	// Check each profile
+	root, _ := profilesRoot()
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return err
+	}
+
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		dir, _ := profileDir(name)
+
+		fmt.Printf("\nProfile %q:\n", name)
+
+		// Check profile-specific items exist
+		for _, item := range profileSpecificItems {
+			path := filepath.Join(dir, item)
+			if _, err := os.Stat(path); os.IsNotExist(err) {
+				warn("Missing: %s", item)
+			}
+		}
+
+		// Walk all entries and check for broken symlinks
+		dirEntries, err := os.ReadDir(dir)
+		if err != nil {
+			warn("Cannot read profile directory: %v", err)
+			continue
+		}
+
+		brokenLinks := 0
+		for _, de := range dirEntries {
+			path := filepath.Join(dir, de.Name())
+			info, err := os.Lstat(path)
+			if err != nil {
+				continue
+			}
+			if info.Mode()&os.ModeSymlink == 0 {
+				continue
+			}
+			target, err := os.Readlink(path)
+			if err != nil {
+				warn("Unreadable symlink: %s", de.Name())
+				brokenLinks++
+				continue
+			}
+			if _, err := os.Stat(target); os.IsNotExist(err) {
+				warn("Broken symlink: %s → %s", de.Name(), target)
+				brokenLinks++
+			}
+		}
+
+		if brokenLinks == 0 {
+			ok("All symlinks valid")
+		}
+	}
+
+	fmt.Println()
+	if issues == 0 {
+		fmt.Println("No issues found.")
+	} else {
+		fmt.Printf("Found %d issue(s).\n", issues)
+	}
+	return nil
+}
 
 // cmdInit sets up the profile system directory structure.
 func cmdInit() error {
@@ -108,9 +221,22 @@ func cmdCreate(args []string) error {
 // cmdClone duplicates a profile. Symlinks are recreated, real files are copied.
 func cmdClone(args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: claude-rig clone <source> <dest>")
+		return fmt.Errorf("usage: claude-rig clone <source> <dest> [--link-auth]")
 	}
-	srcName, destName := args[0], args[1]
+
+	var positional []string
+	var linkAuth bool
+	for _, a := range args {
+		if a == "--link-auth" {
+			linkAuth = true
+		} else {
+			positional = append(positional, a)
+		}
+	}
+	if len(positional) < 2 {
+		return fmt.Errorf("usage: claude-rig clone <source> <dest> [--link-auth]")
+	}
+	srcName, destName := positional[0], positional[1]
 
 	if err := validateProfileName(destName); err != nil {
 		return err
@@ -135,6 +261,13 @@ func cmdClone(args []string) error {
 	if err := cloneDir(srcDir, destDir); err != nil {
 		os.RemoveAll(destDir) // clean up partial clone
 		return fmt.Errorf("cloning profile: %w", err)
+	}
+
+	if linkAuth {
+		if err := linkAuthFiles(destDir); err != nil {
+			return fmt.Errorf("linking auth files: %w", err)
+		}
+		fmt.Println("Linked auth from existing Claude config")
 	}
 
 	fmt.Printf("Cloned %q → %q\n", srcName, destName)
@@ -191,12 +324,24 @@ func cloneDir(src, dest string) error {
 	return nil
 }
 
-// cmdLinkAuth links shared auth files into an existing profile.
+// cmdLinkAuth links auth files into a profile from ~/.claude/ or another profile.
 func cmdLinkAuth(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: claude-rig link-auth <name>")
+		return fmt.Errorf("usage: claude-rig link-auth <name> [--from <profile>]")
 	}
-	name := args[0]
+
+	var name, fromProfile string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--from" && i+1 < len(args) {
+			fromProfile = args[i+1]
+			i++
+		} else if name == "" {
+			name = args[i]
+		}
+	}
+	if name == "" {
+		return fmt.Errorf("usage: claude-rig link-auth <name> [--from <profile>]")
+	}
 
 	dir, err := profileDir(name)
 	if err != nil {
@@ -206,20 +351,38 @@ func cmdLinkAuth(args []string) error {
 		return fmt.Errorf("profile %q does not exist", name)
 	}
 
-	home, err := claudeHome()
-	if err != nil {
-		return err
-	}
-	userHome, err := os.UserHomeDir()
-	if err != nil {
-		return err
+	// Resolve auth source directories
+	var authHome, authUserHome string
+	if fromProfile != "" {
+		if fromProfile == name {
+			return fmt.Errorf("cannot link auth from a profile to itself")
+		}
+		fromDir, err := profileDir(fromProfile)
+		if err != nil {
+			return err
+		}
+		if _, err := os.Stat(fromDir); os.IsNotExist(err) {
+			return fmt.Errorf("source profile %q does not exist", fromProfile)
+		}
+		// All auth items live inside the profile dir
+		authHome = fromDir
+		authUserHome = fromDir
+	} else {
+		authHome, err = claudeHome()
+		if err != nil {
+			return err
+		}
+		authUserHome, err = os.UserHomeDir()
+		if err != nil {
+			return err
+		}
 	}
 
 	for _, item := range authItems {
-		// .claude.json lives in ~ rather than ~/.claude/
-		sourceDir := home
-		if item == ".claude.json" {
-			sourceDir = userHome
+		// .claude.json lives in ~ when linking from default, but inside profile dir when linking from profile
+		sourceDir := authHome
+		if item == ".claude.json" && fromProfile == "" {
+			sourceDir = authUserHome
 		}
 
 		target := filepath.Join(sourceDir, item)
@@ -254,7 +417,11 @@ func cmdLinkAuth(args []string) error {
 		fmt.Printf("Linked %s\n", item)
 	}
 
-	fmt.Printf("Profile %q now uses shared auth\n", name)
+	if fromProfile != "" {
+		fmt.Printf("Profile %q now uses auth from %q\n", name, fromProfile)
+	} else {
+		fmt.Printf("Profile %q now uses shared auth\n", name)
+	}
 	return nil
 }
 
@@ -296,7 +463,7 @@ func cmdUnlinkAuth(args []string) error {
 	return nil
 }
 
-// cmdList shows all profiles and marks the active one.
+// cmdList shows all profiles with auth status and item counts.
 func cmdList() error {
 	root, err := profilesRoot()
 	if err != nil {
@@ -314,23 +481,91 @@ func cmdList() error {
 
 	active := getActiveProfile()
 
+	// First pass: collect names to resolve auth targets to profile names
+	profileDirs := map[string]string{} // dir path → profile name
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dir, _ := profileDir(e.Name())
+		profileDirs[dir] = e.Name()
+	}
+
 	found := false
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
 		found = true
+		name := e.Name()
+		dir, _ := profileDir(name)
+
 		marker := "  "
-		if e.Name() == active {
+		if name == active {
 			marker = "* "
 		}
-		fmt.Printf("%s%s\n", marker, e.Name())
+
+		auth := profileAuthStatus(dir, profileDirs)
+		skills := countDirEntries(filepath.Join(dir, "skills"))
+		plugins := countDirEntries(filepath.Join(dir, "plugins"))
+		mcp := countMCPServers(filepath.Join(dir, "mcp.json"))
+
+		fmt.Printf("%s%-20s auth: %-20s skills: %d  plugins: %d  mcp: %d\n",
+			marker, name, auth, skills, plugins, mcp)
 	}
 
 	if !found {
 		fmt.Println("No profiles found. Run: claude-rig create <name>")
 	}
 	return nil
+}
+
+// profileAuthStatus returns the auth status for a profile.
+func profileAuthStatus(dir string, profileDirs map[string]string) string {
+	credPath := filepath.Join(dir, ".credentials.json")
+	info, err := os.Lstat(credPath)
+	if err != nil {
+		return "none"
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return "own"
+	}
+	target, err := os.Readlink(credPath)
+	if err != nil {
+		return "linked"
+	}
+	// Resolve target to a friendly name
+	targetDir := filepath.Dir(target)
+	if name, ok := profileDirs[targetDir]; ok {
+		return "linked (" + name + ")"
+	}
+	home, _ := claudeHome()
+	if targetDir == home {
+		return "linked (~/.claude)"
+	}
+	return "linked"
+}
+
+func countDirEntries(dir string) int {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0
+	}
+	return len(entries)
+}
+
+func countMCPServers(path string) int {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	var cfg struct {
+		MCPServers map[string]json.RawMessage `json:"mcpServers"`
+	}
+	if json.Unmarshal(data, &cfg) != nil {
+		return 0
+	}
+	return len(cfg.MCPServers)
 }
 
 // cmdUse sets the active profile (for shell alias workflows).

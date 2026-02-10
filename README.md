@@ -79,14 +79,15 @@ claude-rig launch minimal
 |---|---|
 | `init` | Initialize the profile system (`~/.claude-rig/profiles/`) |
 | `create <name>` | Create a new profile (`--link-auth` to reuse existing auth) |
-| `clone <src> <dest>` | Clone a profile (copies settings, preserves symlinks) |
-| `link-auth <name>` | Link existing profile to shared auth from `~/.claude/` |
+| `clone <src> <dest>` | Clone a profile (`--link-auth` to use shared auth) |
+| `link-auth <name>` | Link profile to shared auth (`--from <profile>` for cross-profile) |
 | `unlink-auth <name>` | Remove shared auth, profile will use its own |
-| `list` | List all profiles, mark active one |
+| `list` | List all profiles with auth status and item counts |
 | `use <name>` | Set the active profile |
 | `current` | Show currently active profile |
 | `delete <name>` | Delete a profile (with confirmation) |
 | `launch <name> [args]` | Launch Claude Code with the given profile |
+| `doctor` | Check profiles for broken symlinks and missing items |
 
 ## Shell Integration
 

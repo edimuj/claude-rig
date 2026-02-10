@@ -51,6 +51,8 @@ func main() {
 		err = cmdUnlinkAuth(args)
 	case "init":
 		err = cmdInit()
+	case "doctor":
+		err = cmdDoctor()
 	case "version", "--version", "-v":
 		fmt.Printf("claude-rig %s\n", getVersion())
 	case "help", "--help", "-h":
@@ -76,14 +78,15 @@ Usage:
 Commands:
   create <name>           Create a new profile
     --link-auth            Symlink auth from existing ~/.claude/ (skip onboarding)
-  clone <src> <dest>      Clone a profile (copies settings, preserves symlinks)
-  link-auth <name>        Link existing profile to shared auth from ~/.claude/
+  clone <src> <dest>      Clone a profile (--link-auth to use shared auth)
+  link-auth <name>        Link profile to shared auth (--from <profile> for cross-profile)
   unlink-auth <name>      Remove shared auth, profile will use its own
   list                    List all profiles and show active one
   use <name>              Set the active profile (for shell alias usage)
   current                 Show the currently active profile
   delete <name>           Delete a profile
   launch <name> [args]    Launch Claude Code with a specific profile
+  doctor                  Check profiles for broken symlinks and missing items
   init                    Initialize profile system (run once)
   version                 Show version
   help                    Show this help
