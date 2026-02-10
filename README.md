@@ -87,6 +87,8 @@ claude-rig launch minimal
 | `current` | Show currently active profile |
 | `delete <name>` | Delete a profile (with confirmation) |
 | `launch <name> [args]` | Launch Claude Code with the given profile |
+| `set-args [name] <args>` | Set default launch args (global if no name, per-profile if given) |
+| `show-args [name]` | Show default launch args |
 | `doctor` | Check profiles for broken symlinks and missing items |
 
 ## Shell Integration
