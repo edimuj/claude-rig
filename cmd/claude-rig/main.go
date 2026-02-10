@@ -30,6 +30,8 @@ func main() {
 		err = cmdDelete(args)
 	case "launch":
 		err = cmdLaunch(args)
+	case "link-auth":
+		err = cmdLinkAuth(args)
 	case "init":
 		err = cmdInit()
 	case "version", "--version", "-v":
@@ -55,7 +57,9 @@ Usage:
   claude-rig <command> [arguments]
 
 Commands:
-  create <name>           Create a new profile (optionally from current config)
+  create <name>           Create a new profile
+    --link-auth            Symlink auth from existing ~/.claude/ (skip onboarding)
+  link-auth <name>        Link existing profile to shared auth from ~/.claude/
   list                    List all profiles and show active one
   use <name>              Set the active profile (for shell alias usage)
   current                 Show the currently active profile
@@ -68,7 +72,7 @@ Commands:
 Examples:
   claude-rig init                    # Set up the profile system
   claude-rig create minimal          # Create a new empty profile
-  claude-rig create webappdev        # Create another profile
+  claude-rig create webappdev --link-auth  # Create profile, reuse existing auth
   claude-rig launch webappdev        # Launch Claude Code with this profile
   claude-rig list                    # See all profiles
 

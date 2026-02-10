@@ -18,6 +18,12 @@ var profileSpecificItems = []string{
 	"mcp.json",
 }
 
+// authItems are files/directories needed to skip onboarding and reuse existing auth.
+var authItems = []string{
+	".credentials.json",
+	"statsig",
+}
+
 // sharedItems are explicitly symlinked from the canonical ~/.claude/ into each profile.
 // This list is discovered dynamically at profile creation time — anything in ~/.claude/
 // that is NOT profile-specific gets symlinked.

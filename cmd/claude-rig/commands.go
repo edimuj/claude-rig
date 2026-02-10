@@ -30,9 +30,21 @@ func cmdInit() error {
 // and symlinks to shared items in ~/.claude/.
 func cmdCreate(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: claude-rig create <name>")
+		return fmt.Errorf("usage: claude-rig create <name> [--link-auth]")
 	}
-	name := args[0]
+
+	var name string
+	var linkAuth bool
+	for _, a := range args {
+		if a == "--link-auth" {
+			linkAuth = true
+		} else if name == "" {
+			name = a
+		}
+	}
+	if name == "" {
+		return fmt.Errorf("usage: claude-rig create <name> [--link-auth]")
+	}
 
 	if err := validateProfileName(name); err != nil {
 		return err
@@ -80,8 +92,73 @@ func cmdCreate(args []string) error {
 		return fmt.Errorf("creating shared symlinks: %w", err)
 	}
 
+	// Optionally symlink auth files from ~/.claude/
+	if linkAuth {
+		if err := linkAuthFiles(dir); err != nil {
+			return fmt.Errorf("linking auth files: %w", err)
+		}
+		fmt.Println("Linked auth from existing Claude config")
+	}
+
 	fmt.Printf("Created profile %q at %s\n", name, dir)
 	fmt.Printf("Launch with: claude-rig launch %s\n", name)
+	return nil
+}
+
+// cmdLinkAuth links shared auth files into an existing profile.
+func cmdLinkAuth(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: claude-rig link-auth <name>")
+	}
+	name := args[0]
+
+	dir, err := profileDir(name)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return fmt.Errorf("profile %q does not exist", name)
+	}
+
+	home, err := claudeHome()
+	if err != nil {
+		return err
+	}
+
+	for _, item := range authItems {
+		target := filepath.Join(home, item)
+		if _, err := os.Stat(target); os.IsNotExist(err) {
+			continue
+		}
+
+		linkPath := filepath.Join(dir, item)
+		info, err := os.Lstat(linkPath)
+		if err == nil {
+			// Already a symlink pointing to the right place — skip
+			if info.Mode()&os.ModeSymlink != 0 {
+				dest, _ := os.Readlink(linkPath)
+				if dest == target {
+					continue
+				}
+			}
+			// Real file or symlink to somewhere else — warn
+			fmt.Printf("Profile %q already has %s. Replace with shared auth? [y/N] ", name, item)
+			var confirm string
+			fmt.Scanln(&confirm)
+			if strings.ToLower(confirm) != "y" {
+				fmt.Printf("Skipped %s\n", item)
+				continue
+			}
+			os.RemoveAll(linkPath)
+		}
+
+		if err := os.Symlink(target, linkPath); err != nil {
+			return fmt.Errorf("symlinking %s: %w", item, err)
+		}
+		fmt.Printf("Linked %s\n", item)
+	}
+
+	fmt.Printf("Profile %q now uses shared auth\n", name)
 	return nil
 }
 
@@ -239,6 +316,28 @@ func cmdLaunch(args []string) error {
 }
 
 // --- helpers ---
+
+func linkAuthFiles(profileDir string) error {
+	home, err := claudeHome()
+	if err != nil {
+		return err
+	}
+
+	for _, item := range authItems {
+		target := filepath.Join(home, item)
+		if _, err := os.Stat(target); os.IsNotExist(err) {
+			continue
+		}
+		linkPath := filepath.Join(profileDir, item)
+		if _, err := os.Lstat(linkPath); err == nil {
+			continue
+		}
+		if err := os.Symlink(target, linkPath); err != nil {
+			return fmt.Errorf("symlinking %s: %w", item, err)
+		}
+	}
+	return nil
+}
 
 func syncSharedSymlinks(profileDir string) error {
 	home, err := claudeHome()
