@@ -3,9 +3,22 @@ package main
 import (
 	"fmt"
 	"os"
+	"runtime/debug"
 )
 
-const version = "0.1.0"
+// version is set at build time via -ldflags "-X main.version=..."
+// Falls back to Go module version info when installed via `go install`.
+var version = ""
+
+func getVersion() string {
+	if version != "" {
+		return version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+	return "dev"
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -35,7 +48,7 @@ func main() {
 	case "init":
 		err = cmdInit()
 	case "version", "--version", "-v":
-		fmt.Printf("claude-rig %s\n", version)
+		fmt.Printf("claude-rig %s\n", getVersion())
 	case "help", "--help", "-h":
 		printUsage()
 	default:
