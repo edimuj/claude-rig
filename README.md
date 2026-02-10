@@ -48,6 +48,14 @@ cd claude-rig
 make build
 ```
 
+## Development
+
+```bash
+make build                # build binary
+make run ARGS="version"   # run without installing
+make install              # install to ~/go/bin/
+```
+
 ## Quick Start
 
 ```bash
@@ -70,7 +78,9 @@ claude-rig launch minimal
 | Command | Description |
 |---|---|
 | `init` | Initialize the profile system (`~/.claude-rig/profiles/`) |
-| `create <name>` | Create a new profile |
+| `create <name>` | Create a new profile (`--link-auth` to reuse existing auth) |
+| `link-auth <name>` | Link existing profile to shared auth from `~/.claude/` |
+| `unlink-auth <name>` | Remove shared auth, profile will use its own |
 | `list` | List all profiles, mark active one |
 | `use <name>` | Set the active profile |
 | `current` | Show currently active profile |

@@ -45,6 +45,8 @@ func main() {
 		err = cmdLaunch(args)
 	case "link-auth":
 		err = cmdLinkAuth(args)
+	case "unlink-auth":
+		err = cmdUnlinkAuth(args)
 	case "init":
 		err = cmdInit()
 	case "version", "--version", "-v":
@@ -73,6 +75,7 @@ Commands:
   create <name>           Create a new profile
     --link-auth            Symlink auth from existing ~/.claude/ (skip onboarding)
   link-auth <name>        Link existing profile to shared auth from ~/.claude/
+  unlink-auth <name>      Remove shared auth, profile will use its own
   list                    List all profiles and show active one
   use <name>              Set the active profile (for shell alias usage)
   current                 Show the currently active profile

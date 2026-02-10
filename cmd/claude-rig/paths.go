@@ -19,8 +19,10 @@ var profileSpecificItems = []string{
 }
 
 // authItems are files/directories needed to skip onboarding and reuse existing auth.
+// .claude.json lives in ~ (not ~/.claude/) and holds onboarding/account state.
 var authItems = []string{
 	".credentials.json",
+	".claude.json",
 	"statsig",
 }
 

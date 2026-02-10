@@ -124,9 +124,19 @@ func cmdLinkAuth(args []string) error {
 	if err != nil {
 		return err
 	}
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
 
 	for _, item := range authItems {
-		target := filepath.Join(home, item)
+		// .claude.json lives in ~ rather than ~/.claude/
+		sourceDir := home
+		if item == ".claude.json" {
+			sourceDir = userHome
+		}
+
+		target := filepath.Join(sourceDir, item)
 		if _, err := os.Stat(target); os.IsNotExist(err) {
 			continue
 		}
@@ -159,6 +169,44 @@ func cmdLinkAuth(args []string) error {
 	}
 
 	fmt.Printf("Profile %q now uses shared auth\n", name)
+	return nil
+}
+
+// cmdUnlinkAuth removes shared auth symlinks from a profile.
+func cmdUnlinkAuth(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: claude-rig unlink-auth <name>")
+	}
+	name := args[0]
+
+	dir, err := profileDir(name)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return fmt.Errorf("profile %q does not exist", name)
+	}
+
+	removed := 0
+	for _, item := range authItems {
+		linkPath := filepath.Join(dir, item)
+		info, err := os.Lstat(linkPath)
+		if err != nil {
+			continue
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			continue // not a symlink, leave it alone
+		}
+		os.Remove(linkPath)
+		fmt.Printf("Removed %s\n", item)
+		removed++
+	}
+
+	if removed == 0 {
+		fmt.Printf("Profile %q has no shared auth links\n", name)
+	} else {
+		fmt.Printf("Profile %q will use its own auth on next launch\n", name)
+	}
 	return nil
 }
 
@@ -322,9 +370,19 @@ func linkAuthFiles(profileDir string) error {
 	if err != nil {
 		return err
 	}
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
 
 	for _, item := range authItems {
-		target := filepath.Join(home, item)
+		// .claude.json lives in ~ rather than ~/.claude/
+		sourceDir := home
+		if item == ".claude.json" {
+			sourceDir = userHome
+		}
+
+		target := filepath.Join(sourceDir, item)
 		if _, err := os.Stat(target); os.IsNotExist(err) {
 			continue
 		}
