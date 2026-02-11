@@ -37,7 +37,7 @@ Each profile gets its own config directory under `~/.claude-rig/profiles/`. Prof
 ## Install
 
 ```bash
-go install github.com/edimuj/claude-rig/cmd/claude-rig@latest
+go install github.com/edimuj/claude-rig/cmd/claude-rig@v0.7.0
 ```
 
 Or build from source:
