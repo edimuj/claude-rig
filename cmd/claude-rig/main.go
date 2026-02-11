@@ -22,8 +22,21 @@ func getVersion() string {
 
 func main() {
 	if len(os.Args) < 2 {
-		printUsage()
-		os.Exit(1)
+		// No subcommand — try RC file
+		profile, _, err := findRC()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		if profile == "" {
+			printUsage()
+			os.Exit(1)
+		}
+		if err := cmdLaunch(nil); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	cmd := os.Args[1]
@@ -55,6 +68,8 @@ func main() {
 		err = cmdSetArgs(args)
 	case "show-args":
 		err = cmdShowArgs(args)
+	case "rc":
+		err = cmdRC(args)
 	case "doctor":
 		err = cmdDoctor()
 	case "version", "--version", "-v":
@@ -89,7 +104,8 @@ Commands:
   use <name>              Set the active profile (for shell alias usage)
   current                 Show the currently active profile
   delete <name>           Delete a profile
-  launch <name> [args]    Launch Claude Code with a specific profile
+  launch [name] [args]    Launch Claude Code with a specific profile
+  rc [name]               Show or set .claude-rig file for current directory
   set-args [name] <args>  Set default launch args (global if no name, per-profile if given)
   show-args [name]        Show default launch args
   doctor                  Check profiles for broken symlinks and missing items
@@ -103,6 +119,8 @@ Examples:
   claude-rig create webappdev --link-auth  # Create profile, reuse existing auth
   claude-rig launch webappdev        # Launch Claude Code with this profile
   claude-rig list                    # See all profiles
+  claude-rig rc minimal              # Bind current directory to a profile
+  claude-rig                         # Auto-launch from .claude-rig file
 
 Shell integration (add to ~/.bashrc or ~/.zshrc):
   alias claude-minimal='claude-rig launch minimal'

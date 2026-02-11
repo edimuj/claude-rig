@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -887,11 +888,26 @@ func cmdDelete(args []string) error {
 
 // cmdLaunch starts Claude Code with the specified profile's config dir.
 func cmdLaunch(args []string) error {
-	if len(args) < 1 {
-		return fmt.Errorf("usage: claude-rig launch <name> [claude-args...]")
+	var name string
+	var extraArgs []string
+	var rcPath string
+
+	if len(args) >= 1 && !strings.HasPrefix(args[0], "-") {
+		name = args[0]
+		extraArgs = args[1:]
+	} else {
+		// No profile name — try RC file
+		profile, path, err := findRC()
+		if err != nil {
+			return err
+		}
+		if profile == "" {
+			return fmt.Errorf("usage: claude-rig launch <name> [claude-args...]")
+		}
+		name = profile
+		rcPath = path
+		extraArgs = args // all args are claude args
 	}
-	name := args[0]
-	extraArgs := args[1:]
 
 	dir, err := profileDir(name)
 	if err != nil {
@@ -899,6 +915,10 @@ func cmdLaunch(args []string) error {
 	}
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		return fmt.Errorf("profile %q does not exist", name)
+	}
+
+	if rcPath != "" {
+		fmt.Fprintf(os.Stderr, "Using profile %q from %s\n", name, rcPath)
 	}
 
 	// Refresh shared symlinks in case new files appeared in ~/.claude/
@@ -930,6 +950,97 @@ func cmdLaunch(args []string) error {
 	execArgs := append([]string{binary}, defaultArgs...)
 	execArgs = append(execArgs, extraArgs...)
 	return syscall.Exec(binPath, execArgs, env)
+}
+
+// findRC walks from cwd up to $HOME looking for a .claude-rig file.
+func findRC() (profile string, path string, err error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", "", err
+	}
+
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", "", err
+	}
+
+	for {
+		candidate := filepath.Join(dir, ".claude-rig")
+		if _, err := os.Stat(candidate); err == nil {
+			profile, err := parseRC(candidate)
+			if err != nil {
+				return "", candidate, err
+			}
+			return profile, candidate, nil
+		}
+
+		if dir == home {
+			break
+		}
+
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break // filesystem root
+		}
+		dir = parent
+	}
+	return "", "", nil
+}
+
+// parseRC reads a .claude-rig file and returns the rig= value.
+func parseRC(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "rig=") {
+			val := strings.TrimSpace(line[4:])
+			if val == "" {
+				return "", fmt.Errorf("empty rig= value in %s", path)
+			}
+			return val, nil
+		}
+	}
+	return "", fmt.Errorf("no rig= key found in %s", path)
+}
+
+// cmdRC shows or creates a .claude-rig file in the current directory.
+func cmdRC(args []string) error {
+	if len(args) == 0 {
+		profile, path, err := findRC()
+		if err != nil {
+			return err
+		}
+		if profile == "" {
+			fmt.Println("No .claude-rig file found")
+			return nil
+		}
+		fmt.Printf("Profile %q from %s\n", profile, path)
+		return nil
+	}
+
+	name := args[0]
+	dir, err := profileDir(name)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return fmt.Errorf("profile %q does not exist", name)
+	}
+
+	if err := os.WriteFile(".claude-rig", []byte("rig="+name+"\n"), 0644); err != nil {
+		return fmt.Errorf("writing .claude-rig: %w", err)
+	}
+	fmt.Printf("Created .claude-rig with profile %q\n", name)
+	return nil
 }
 
 // --- helpers ---

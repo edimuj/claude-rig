@@ -73,6 +73,28 @@ claude-rig launch webappdev
 claude-rig launch minimal
 ```
 
+## Project Profiles
+
+Bind a profile to a project directory with a `.claude-rig` file so you don't have to type the profile name every time:
+
+```bash
+cd ~/projects/my-app
+
+# Create the .claude-rig file
+claude-rig rc webappdev
+
+# Now just run claude-rig — it picks up the profile automatically
+claude-rig
+```
+
+The file is a simple key=value format:
+
+```
+rig=webappdev
+```
+
+Lookup walks from the current directory up to `$HOME`, so subdirectories inherit the project's profile. Both `claude-rig` (no subcommand) and `claude-rig launch` (no profile arg) will use the RC file. An explicit `claude-rig launch other` still overrides it.
+
 ## Commands
 
 | Command | Description |
@@ -86,7 +108,8 @@ claude-rig launch minimal
 | `use <name>` | Set the active profile |
 | `current` | Show currently active profile |
 | `delete <name>` | Delete a profile (with confirmation) |
-| `launch <name> [args]` | Launch Claude Code with the given profile |
+| `launch [name] [args]` | Launch Claude Code with the given profile (or from `.claude-rig` file) |
+| `rc [name]` | Show or create `.claude-rig` file for current directory |
 | `set-args [name] <args>` | Set default launch args (global if no name, per-profile if given) |
 | `show-args [name]` | Show default launch args |
 | `doctor` | Check profiles for broken symlinks and missing items |
