@@ -23,12 +23,12 @@ func getVersion() string {
 func main() {
 	if len(os.Args) < 2 {
 		// No subcommand — try RC file
-		profile, _, err := findRC()
+		rig, _, err := findRC()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-		if profile == "" {
+		if rig == "" {
 			printUsage()
 			os.Exit(1)
 		}
@@ -89,37 +89,37 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Print(`claude-rig - Manage Claude Code configuration profiles
+	fmt.Print(`claude-rig - Manage multiple Claude Code configuration rigs
 
 Usage:
   claude-rig <command> [arguments]
 
 Commands:
-  create <name>           Create a new profile
+  create <name>           Create a new rig
     --link-auth            Symlink auth from existing ~/.claude/ (skip onboarding)
-  clone <src> <dest>      Clone a profile (--link-auth to use shared auth)
-  link-auth <name>        Link profile to shared auth (--from <profile> for cross-profile)
-  unlink-auth <name>      Remove shared auth, profile will use its own
-  list                    List all profiles and show active one
-  use <name>              Set the active profile (for shell alias usage)
-  current                 Show the currently active profile
-  delete <name>           Delete a profile
-  launch [name] [args]    Launch Claude Code with a specific profile
+  clone <src> <dest>      Clone a rig (--link-auth to use shared auth)
+  link-auth <name>        Link rig to shared auth (--from <rig> for cross-rig)
+  unlink-auth <name>      Remove shared auth, rig will use its own
+  list                    List all rigs and show active one
+  use <name>              Set the active rig (for shell alias usage)
+  current                 Show the currently active rig
+  delete <name>           Delete a rig
+  launch [name] [args]    Launch Claude Code with a specific rig
   rc [name]               Show or set .claude-rig file for current directory
-  set-args [name] <args>  Set default launch args (global if no name, per-profile if given)
+  set-args [name] <args>  Set default launch args (global if no name, per-rig if given)
   show-args [name]        Show default launch args
-  doctor                  Check profiles for broken symlinks and missing items
-  init                    Initialize profile system (run once)
+  doctor                  Check rigs for broken symlinks and missing items
+  init                    Initialize rig system (run once)
   version                 Show version
   help                    Show this help
 
 Examples:
-  claude-rig init                    # Set up the profile system
-  claude-rig create minimal          # Create a new empty profile
-  claude-rig create webappdev --link-auth  # Create profile, reuse existing auth
-  claude-rig launch webappdev        # Launch Claude Code with this profile
-  claude-rig list                    # See all profiles
-  claude-rig rc minimal              # Bind current directory to a profile
+  claude-rig init                    # Set up the rig system
+  claude-rig create minimal          # Create a new empty rig
+  claude-rig create webappdev --link-auth  # Create rig, reuse existing auth
+  claude-rig launch webappdev        # Launch Claude Code with this rig
+  claude-rig list                    # See all rigs
+  claude-rig rc minimal              # Bind current directory to a rig
   claude-rig                         # Auto-launch from .claude-rig file
 
 Shell integration (add to ~/.bashrc or ~/.zshrc):

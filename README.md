@@ -4,13 +4,13 @@
 
 # claude-rig
 
-Manage multiple Claude Code configuration profiles with full isolation for concurrent use.
+Manage multiple Claude Code configuration rigs with full isolation for concurrent use.
 
 Run `claude --rig minimal` in one terminal and `claude --rig webappdev` in another — each with its own settings, skills, plugins, MCP servers, and agents — while sharing authentication, memory, and session history.
 
 ## How It Works
 
-Each profile gets its own config directory under `~/.claude-rig/profiles/`. Profile-specific files (settings, skills, plugins, agents, commands, hooks, MCP config) live as real files in the profile directory. Shared files (CLAUDE.md, credentials, sessions, todos) are symlinked back to `~/.claude/`, so all profiles share authentication and memory.
+Each rig gets its own config directory under `~/.claude-rig/rigs/`. Rig-specific files (settings, skills, plugins, agents, commands, hooks, MCP config) live as real files in the rig directory. Shared files (CLAUDE.md, credentials, sessions, todos) are symlinked back to `~/.claude/`, so all rigs share authentication and memory.
 
 ```
 ~/.claude/                          # Canonical home (shared)
@@ -19,13 +19,13 @@ Each profile gets its own config directory under `~/.claude-rig/profiles/`. Prof
     sessions/                       # History — shared
 
 ~/.claude-rig/
-    .active                             # Current profile marker
-    profiles/
+    .active                             # Current rig marker
+    rigs/
         minimal/
-        settings.json               # Profile-specific
-        skills/                     # Profile-specific
-        plugins/                    # Profile-specific
-        agents/                     # Profile-specific
+        settings.json               # Rig-specific
+        skills/                     # Rig-specific
+        plugins/                    # Rig-specific
+        agents/                     # Rig-specific
         CLAUDE.md → ~/.claude/CLAUDE.md    # Symlink to shared
     webappdev/
         settings.json               # Different config
@@ -59,23 +59,23 @@ make install              # install to ~/go/bin/
 ## Quick Start
 
 ```bash
-# Initialize the profile system
+# Initialize the rig system
 claude-rig init
 
-# Create profiles
+# Create rigs
 claude-rig create minimal
 claude-rig create webappdev
 
-# Launch Claude Code with a specific profile
+# Launch Claude Code with a specific rig
 claude-rig launch webappdev
 
-# In another terminal, run a different profile simultaneously
+# In another terminal, run a different rig simultaneously
 claude-rig launch minimal
 ```
 
-## Project Profiles
+## Project Rigs
 
-Bind a profile to a project directory with a `.claude-rig` file so you don't have to type the profile name every time:
+Bind a rig to a project directory with a `.claude-rig` file so you don't have to type the rig name every time:
 
 ```bash
 cd ~/projects/my-app
@@ -83,7 +83,7 @@ cd ~/projects/my-app
 # Create the .claude-rig file
 claude-rig rc webappdev
 
-# Now just run claude-rig — it picks up the profile automatically
+# Now just run claude-rig — it picks up the rig automatically
 claude-rig
 ```
 
@@ -93,33 +93,33 @@ The file is a simple key=value format:
 rig=webappdev
 ```
 
-Lookup walks from the current directory up to `$HOME`, so subdirectories inherit the project's profile. Both `claude-rig` (no subcommand) and `claude-rig launch` (no profile arg) will use the RC file. An explicit `claude-rig launch other` still overrides it.
+Lookup walks from the current directory up to `$HOME`, so subdirectories inherit the project's rig. Both `claude-rig` (no subcommand) and `claude-rig launch` (no rig arg) will use the RC file. An explicit `claude-rig launch other` still overrides it.
 
 ## Commands
 
 | Command | Description |
 |---|---|
-| `init` | Initialize the profile system (`~/.claude-rig/profiles/`) |
-| `create <name>` | Create a new profile (`--link-auth` to reuse existing auth) |
-| `clone <src> <dest>` | Clone a profile (`--link-auth` to use shared auth) |
-| `link-auth <name>` | Link profile to shared auth (`--from <profile>` for cross-profile) |
-| `unlink-auth <name>` | Remove shared auth, profile will use its own |
-| `list` | List all profiles with auth status and item counts |
-| `use <name>` | Set the active profile |
-| `current` | Show currently active profile |
-| `delete <name>` | Delete a profile (with confirmation) |
-| `launch [name] [args]` | Launch Claude Code with the given profile (or from `.claude-rig` file) |
+| `init` | Initialize the rig system (`~/.claude-rig/rigs/`) |
+| `create <name>` | Create a new rig (`--link-auth` to reuse existing auth) |
+| `clone <src> <dest>` | Clone a rig (`--link-auth` to use shared auth) |
+| `link-auth <name>` | Link rig to shared auth (`--from <rig>` for cross-rig) |
+| `unlink-auth <name>` | Remove shared auth, rig will use its own |
+| `list` | List all rigs with auth status and item counts |
+| `use <name>` | Set the active rig |
+| `current` | Show currently active rig |
+| `delete <name>` | Delete a rig (with confirmation) |
+| `launch [name] [args]` | Launch Claude Code with the given rig (or from `.claude-rig` file) |
 | `rc [name]` | Show or create `.claude-rig` file for current directory |
-| `set-args [name] <args>` | Set default launch args (global if no name, per-profile if given) |
+| `set-args [name] <args>` | Set default launch args (global if no name, per-rig if given) |
 | `show-args [name]` | Show default launch args |
-| `doctor` | Check profiles for broken symlinks and missing items |
+| `doctor` | Check rigs for broken symlinks and missing items |
 
 ## Shell Integration
 
 Add to `~/.bashrc` or `~/.zshrc`:
 
 ```bash
-# Quick aliases per profile
+# Quick aliases per rig
 alias claude-minimal='claude-rig launch minimal'
 alias claude-webdev='claude-rig launch webappdev'
 
@@ -144,7 +144,7 @@ claude --rig=minimal --dangerously-skip-permissions
 
 ## What's Isolated vs. Shared
 
-| Isolated per profile | Shared across profiles |
+| Isolated per rig | Shared across rigs |
 |---|---|
 | `settings.json` | `CLAUDE.md` (memory) |
 | `skills/` | `credentials.json` (auth) |
@@ -163,14 +163,14 @@ claude --rig=minimal --dangerously-skip-permissions
 
 ## How It Works Under the Hood
 
-The tool leverages Claude Code's `CLAUDE_CONFIG_DIR` environment variable. Each profile is a full config directory where:
+The tool leverages Claude Code's `CLAUDE_CONFIG_DIR` environment variable. Each rig is a full config directory where:
 
-1. **Profile-specific files** are real files unique to each profile
+1. **Rig-specific files** are real files unique to each rig
 2. **Shared files** are symlinks pointing back to `~/.claude/`
 3. On `launch`, symlinks are refreshed to pick up any new shared files
-4. Claude Code is exec'd with `CLAUDE_CONFIG_DIR` pointing to the profile directory
+4. Claude Code is exec'd with `CLAUDE_CONFIG_DIR` pointing to the rig directory
 
-This means two Claude Code instances with different profiles can run simultaneously without any conflicts.
+This means two Claude Code instances with different rigs can run simultaneously without any conflicts.
 
 ## Platform Support
 

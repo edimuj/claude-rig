@@ -11,14 +11,14 @@ import (
 	"syscall"
 )
 
-// cmdSetArgs sets default launch arguments globally or per-profile.
+// cmdSetArgs sets default launch arguments globally or per-rig.
 func cmdSetArgs(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: claude-rig set-args [profile] <flags...>\n  Global: claude-rig set-args -- --dangerously-skip-permissions\n  Profile: claude-rig set-args minimal -- --dangerously-skip-permissions")
+		return fmt.Errorf("usage: claude-rig set-args [rig] <flags...>\n  Global: claude-rig set-args -- --dangerously-skip-permissions\n  Rig: claude-rig set-args minimal -- --dangerously-skip-permissions")
 	}
 
-	// Check if first arg is a profile name or a flag
-	dir, profileName, flagArgs := resolveArgsTarget(args)
+	// Check if first arg is a rig name or a flag
+	dir, rigName, flagArgs := resolveArgsTarget(args)
 	if dir == "" {
 		return fmt.Errorf("could not determine target directory")
 	}
@@ -29,8 +29,8 @@ func cmdSetArgs(args []string) error {
 	if len(flagArgs) == 0 {
 		// Clear args
 		os.Remove(file)
-		if profileName != "" {
-			fmt.Printf("Cleared default args for profile %q\n", profileName)
+		if rigName != "" {
+			fmt.Printf("Cleared default args for rig %q\n", rigName)
 		} else {
 			fmt.Println("Cleared global default args")
 		}
@@ -41,8 +41,8 @@ func cmdSetArgs(args []string) error {
 		return fmt.Errorf("writing default-args: %w", err)
 	}
 
-	if profileName != "" {
-		fmt.Printf("Profile %q default args: %s\n", profileName, argsStr)
+	if rigName != "" {
+		fmt.Printf("Rig %q default args: %s\n", rigName, argsStr)
 	} else {
 		fmt.Printf("Global default args: %s\n", argsStr)
 	}
@@ -61,23 +61,23 @@ func cmdShowArgs(args []string) error {
 		fmt.Println("Global:  (none)")
 	}
 
-	// If profile specified, show just that one
+	// If rig specified, show just that one
 	if len(args) > 0 {
-		dir, err := profileDir(args[0])
+		dir, err := rigDir(args[0])
 		if err != nil {
 			return err
 		}
-		profileArgs := loadLaunchArgs(dir)
-		if profileArgs != nil {
-			fmt.Printf("Profile %q: %s\n", args[0], strings.Join(profileArgs, " "))
+		rigArgs := loadLaunchArgs(dir)
+		if rigArgs != nil {
+			fmt.Printf("Rig %q: %s\n", args[0], strings.Join(rigArgs, " "))
 		} else {
-			fmt.Printf("Profile %q: (inherits global)\n", args[0])
+			fmt.Printf("Rig %q: (inherits global)\n", args[0])
 		}
 		return nil
 	}
 
-	// Show all profiles
-	root, _ := profilesRoot()
+	// Show all rigs
+	root, _ := rigsRoot()
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return nil
@@ -86,17 +86,17 @@ func cmdShowArgs(args []string) error {
 		if !e.IsDir() {
 			continue
 		}
-		dir, _ := profileDir(e.Name())
-		profileArgs := loadLaunchArgs(dir)
-		if profileArgs != nil {
-			fmt.Printf("  %-20s %s\n", e.Name()+":", strings.Join(profileArgs, " "))
+		dir, _ := rigDir(e.Name())
+		rigArgs := loadLaunchArgs(dir)
+		if rigArgs != nil {
+			fmt.Printf("  %-20s %s\n", e.Name()+":", strings.Join(rigArgs, " "))
 		}
 	}
 	return nil
 }
 
-// resolveArgsTarget figures out if the user is setting global or per-profile args.
-func resolveArgsTarget(args []string) (dir string, profileName string, flagArgs []string) {
+// resolveArgsTarget figures out if the user is setting global or per-rig args.
+func resolveArgsTarget(args []string) (dir string, rigName string, flagArgs []string) {
 	// If first arg starts with - or is --, it's global
 	if args[0] == "--" || strings.HasPrefix(args[0], "-") {
 		rig, _ := rigHome()
@@ -108,9 +108,9 @@ func resolveArgsTarget(args []string) (dir string, profileName string, flagArgs 
 		return rig, "", flags
 	}
 
-	// First arg is a profile name
-	profileName = args[0]
-	d, err := profileDir(profileName)
+	// First arg is a rig name
+	rigName = args[0]
+	d, err := rigDir(rigName)
 	if err != nil {
 		return "", "", nil
 	}
@@ -123,10 +123,10 @@ func resolveArgsTarget(args []string) (dir string, profileName string, flagArgs 
 	if len(flags) > 0 && flags[0] == "--" {
 		flags = flags[1:]
 	}
-	return d, profileName, flags
+	return d, rigName, flags
 }
 
-// cmdDoctor checks the health of the profile system.
+// cmdDoctor checks the health of the rig system.
 func cmdDoctor() error {
 	issues := 0
 	warn := func(format string, args ...any) {
@@ -160,19 +160,19 @@ func cmdDoctor() error {
 	}
 	ok("Rig home: %s", rig)
 
-	// Check active profile
-	active := getActiveProfile()
+	// Check active rig
+	active := getActiveRig()
 	if active != "" {
-		dir, _ := profileDir(active)
+		dir, _ := rigDir(active)
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
-			warn("Active profile %q does not exist", active)
+			warn("Active rig %q does not exist", active)
 		} else {
-			ok("Active profile: %s", active)
+			ok("Active rig: %s", active)
 		}
 	}
 
-	// Check each profile
-	root, _ := profilesRoot()
+	// Check each rig
+	root, _ := rigsRoot()
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return err
@@ -183,12 +183,12 @@ func cmdDoctor() error {
 			continue
 		}
 		name := e.Name()
-		dir, _ := profileDir(name)
+		dir, _ := rigDir(name)
 
-		fmt.Printf("\nProfile %q:\n", name)
+		fmt.Printf("\nRig %q:\n", name)
 
-		// Check profile-specific items exist
-		for _, item := range profileSpecificItems {
+		// Check rig-specific items exist
+		for _, item := range rigSpecificItems {
 			path := filepath.Join(dir, item)
 			if _, err := os.Stat(path); os.IsNotExist(err) {
 				warn("Missing: %s", item)
@@ -198,7 +198,7 @@ func cmdDoctor() error {
 		// Walk all entries and check for broken symlinks
 		dirEntries, err := os.ReadDir(dir)
 		if err != nil {
-			warn("Cannot read profile directory: %v", err)
+			warn("Cannot read rig directory: %v", err)
 			continue
 		}
 
@@ -254,19 +254,19 @@ claude() {
 }
 `
 
-// cmdInit sets up the profile system directory structure and shell integration.
+// cmdInit sets up the rig system directory structure and shell integration.
 func cmdInit() error {
-	root, err := profilesRoot()
+	root, err := rigsRoot()
 	if err != nil {
 		return err
 	}
 
 	if err := os.MkdirAll(root, 0755); err != nil {
-		return fmt.Errorf("creating profiles directory: %w", err)
+		return fmt.Errorf("creating rigs directory: %w", err)
 	}
 
 	rig, _ := rigHome()
-	fmt.Printf("Initialized profile system at %s\n", rig)
+	fmt.Printf("Initialized rig system at %s\n", rig)
 
 	// Shell integration
 	rcFile := detectShellRC()
@@ -373,7 +373,7 @@ func parseClaudeAlias(line string) string {
 	return ""
 }
 
-// cmdCreate creates a new profile directory with profile-specific items
+// cmdCreate creates a new rig directory with rig-specific items
 // and symlinks to shared items in ~/.claude/.
 func cmdCreate(args []string) error {
 	if len(args) < 1 {
@@ -393,33 +393,33 @@ func cmdCreate(args []string) error {
 		return fmt.Errorf("usage: claude-rig create <name> [--link-auth]")
 	}
 
-	if err := validateProfileName(name); err != nil {
+	if err := validateRigName(name); err != nil {
 		return err
 	}
 
-	dir, err := profileDir(name)
+	dir, err := rigDir(name)
 	if err != nil {
 		return err
 	}
 
 	if _, err := os.Stat(dir); err == nil {
-		return fmt.Errorf("profile %q already exists", name)
+		return fmt.Errorf("rig %q already exists", name)
 	}
 
-	root, err := profilesRoot()
+	root, err := rigsRoot()
 	if err != nil {
 		return err
 	}
 	if _, err := os.Stat(root); os.IsNotExist(err) {
-		return fmt.Errorf("profile system not initialized — run: claude-rig init")
+		return fmt.Errorf("rig system not initialized — run: claude-rig init")
 	}
 
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("creating profile directory: %w", err)
+		return fmt.Errorf("creating rig directory: %w", err)
 	}
 
-	// Create profile-specific directories
-	for _, item := range profileSpecificItems {
+	// Create rig-specific directories
+	for _, item := range rigSpecificItems {
 		path := filepath.Join(dir, item)
 		if strings.HasSuffix(item, ".json") {
 			// Create empty JSON files
@@ -447,12 +447,12 @@ func cmdCreate(args []string) error {
 		fmt.Println("Linked auth from existing Claude config")
 	}
 
-	fmt.Printf("Created profile %q at %s\n", name, dir)
+	fmt.Printf("Created rig %q at %s\n", name, dir)
 	fmt.Printf("Launch with: claude-rig launch %s\n", name)
 	return nil
 }
 
-// cmdClone duplicates a profile. Symlinks are recreated, real files are copied.
+// cmdClone duplicates a rig. Symlinks are recreated, real files are copied.
 func cmdClone(args []string) error {
 	if len(args) < 2 {
 		return fmt.Errorf("usage: claude-rig clone <source> <dest> [--link-auth]")
@@ -472,29 +472,29 @@ func cmdClone(args []string) error {
 	}
 	srcName, destName := positional[0], positional[1]
 
-	if err := validateProfileName(destName); err != nil {
+	if err := validateRigName(destName); err != nil {
 		return err
 	}
 
-	srcDir, err := profileDir(srcName)
+	srcDir, err := rigDir(srcName)
 	if err != nil {
 		return err
 	}
 	if _, err := os.Stat(srcDir); os.IsNotExist(err) {
-		return fmt.Errorf("profile %q does not exist", srcName)
+		return fmt.Errorf("rig %q does not exist", srcName)
 	}
 
-	destDir, err := profileDir(destName)
+	destDir, err := rigDir(destName)
 	if err != nil {
 		return err
 	}
 	if _, err := os.Stat(destDir); err == nil {
-		return fmt.Errorf("profile %q already exists", destName)
+		return fmt.Errorf("rig %q already exists", destName)
 	}
 
 	if err := cloneDir(srcDir, destDir); err != nil {
 		os.RemoveAll(destDir) // clean up partial clone
-		return fmt.Errorf("cloning profile: %w", err)
+		return fmt.Errorf("cloning rig: %w", err)
 	}
 
 	if linkAuth {
@@ -558,47 +558,47 @@ func cloneDir(src, dest string) error {
 	return nil
 }
 
-// cmdLinkAuth links auth files into a profile from ~/.claude/ or another profile.
+// cmdLinkAuth links auth files into a rig from ~/.claude/ or another rig.
 func cmdLinkAuth(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: claude-rig link-auth <name> [--from <profile>]")
+		return fmt.Errorf("usage: claude-rig link-auth <name> [--from <rig>]")
 	}
 
-	var name, fromProfile string
+	var name, fromRig string
 	for i := 0; i < len(args); i++ {
 		if args[i] == "--from" && i+1 < len(args) {
-			fromProfile = args[i+1]
+			fromRig = args[i+1]
 			i++
 		} else if name == "" {
 			name = args[i]
 		}
 	}
 	if name == "" {
-		return fmt.Errorf("usage: claude-rig link-auth <name> [--from <profile>]")
+		return fmt.Errorf("usage: claude-rig link-auth <name> [--from <rig>]")
 	}
 
-	dir, err := profileDir(name)
+	dir, err := rigDir(name)
 	if err != nil {
 		return err
 	}
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return fmt.Errorf("profile %q does not exist", name)
+		return fmt.Errorf("rig %q does not exist", name)
 	}
 
 	// Resolve auth source directories
 	var authHome, authUserHome string
-	if fromProfile != "" {
-		if fromProfile == name {
-			return fmt.Errorf("cannot link auth from a profile to itself")
+	if fromRig != "" {
+		if fromRig == name {
+			return fmt.Errorf("cannot link auth from a rig to itself")
 		}
-		fromDir, err := profileDir(fromProfile)
+		fromDir, err := rigDir(fromRig)
 		if err != nil {
 			return err
 		}
 		if _, err := os.Stat(fromDir); os.IsNotExist(err) {
-			return fmt.Errorf("source profile %q does not exist", fromProfile)
+			return fmt.Errorf("source rig %q does not exist", fromRig)
 		}
-		// All auth items live inside the profile dir
+		// All auth items live inside the rig dir
 		authHome = fromDir
 		authUserHome = fromDir
 	} else {
@@ -613,9 +613,9 @@ func cmdLinkAuth(args []string) error {
 	}
 
 	for _, item := range authItems {
-		// .claude.json lives in ~ when linking from default, but inside profile dir when linking from profile
+		// .claude.json lives in ~ when linking from default, but inside rig dir when linking from rig
 		sourceDir := authHome
-		if item == ".claude.json" && fromProfile == "" {
+		if item == ".claude.json" && fromRig == "" {
 			sourceDir = authUserHome
 		}
 
@@ -635,7 +635,7 @@ func cmdLinkAuth(args []string) error {
 				}
 			}
 			// Real file or symlink to somewhere else — warn
-			fmt.Printf("Profile %q already has %s. Replace with shared auth? [y/N] ", name, item)
+			fmt.Printf("Rig %q already has %s. Replace with shared auth? [y/N] ", name, item)
 			var confirm string
 			fmt.Scanln(&confirm)
 			if strings.ToLower(confirm) != "y" {
@@ -651,27 +651,27 @@ func cmdLinkAuth(args []string) error {
 		fmt.Printf("Linked %s\n", item)
 	}
 
-	if fromProfile != "" {
-		fmt.Printf("Profile %q now uses auth from %q\n", name, fromProfile)
+	if fromRig != "" {
+		fmt.Printf("Rig %q now uses auth from %q\n", name, fromRig)
 	} else {
-		fmt.Printf("Profile %q now uses shared auth\n", name)
+		fmt.Printf("Rig %q now uses shared auth\n", name)
 	}
 	return nil
 }
 
-// cmdUnlinkAuth removes shared auth from a profile so it gets fresh onboarding.
+// cmdUnlinkAuth removes shared auth from a rig so it gets fresh onboarding.
 func cmdUnlinkAuth(args []string) error {
 	if len(args) < 1 {
 		return fmt.Errorf("usage: claude-rig unlink-auth <name>")
 	}
 	name := args[0]
 
-	dir, err := profileDir(name)
+	dir, err := rigDir(name)
 	if err != nil {
 		return err
 	}
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return fmt.Errorf("profile %q does not exist", name)
+		return fmt.Errorf("rig %q does not exist", name)
 	}
 
 	removed := 0
@@ -697,16 +697,16 @@ func cmdUnlinkAuth(args []string) error {
 	cleanAuthBackups(dir)
 
 	if removed == 0 {
-		fmt.Printf("Profile %q has no shared auth to remove\n", name)
+		fmt.Printf("Rig %q has no shared auth to remove\n", name)
 	} else {
-		fmt.Printf("Profile %q will get fresh onboarding on next launch\n", name)
+		fmt.Printf("Rig %q will get fresh onboarding on next launch\n", name)
 	}
 	return nil
 }
 
-// cmdList shows all profiles with auth status and item counts.
+// cmdList shows all rigs with auth status and item counts.
 func cmdList() error {
-	root, err := profilesRoot()
+	root, err := rigsRoot()
 	if err != nil {
 		return err
 	}
@@ -714,22 +714,22 @@ func cmdList() error {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if os.IsNotExist(err) {
-			fmt.Println("No profiles found. Run: claude-rig init")
+			fmt.Println("No rigs found. Run: claude-rig init")
 			return nil
 		}
 		return err
 	}
 
-	active := getActiveProfile()
+	active := getActiveRig()
 
-	// First pass: collect names to resolve auth targets to profile names
-	profileDirs := map[string]string{} // dir path → profile name
+	// First pass: collect names to resolve auth targets to rig names
+	rigDirs := map[string]string{} // dir path → rig name
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
-		dir, _ := profileDir(e.Name())
-		profileDirs[dir] = e.Name()
+		dir, _ := rigDir(e.Name())
+		rigDirs[dir] = e.Name()
 	}
 
 	found := false
@@ -739,14 +739,14 @@ func cmdList() error {
 		}
 		found = true
 		name := e.Name()
-		dir, _ := profileDir(name)
+		dir, _ := rigDir(name)
 
 		marker := "  "
 		if name == active {
 			marker = "* "
 		}
 
-		auth := profileAuthStatus(dir, profileDirs)
+		auth := rigAuthStatus(dir, rigDirs)
 		skills := countDirEntries(filepath.Join(dir, "skills"))
 		plugins := countDirEntries(filepath.Join(dir, "plugins"))
 		mcp := countMCPServers(filepath.Join(dir, "mcp.json"))
@@ -756,13 +756,13 @@ func cmdList() error {
 	}
 
 	if !found {
-		fmt.Println("No profiles found. Run: claude-rig create <name>")
+		fmt.Println("No rigs found. Run: claude-rig create <name>")
 	}
 	return nil
 }
 
-// profileAuthStatus returns the auth status for a profile.
-func profileAuthStatus(dir string, profileDirs map[string]string) string {
+// rigAuthStatus returns the auth status for a rig.
+func rigAuthStatus(dir string, rigDirs map[string]string) string {
 	credPath := filepath.Join(dir, ".credentials.json")
 	info, err := os.Lstat(credPath)
 	if err != nil {
@@ -777,7 +777,7 @@ func profileAuthStatus(dir string, profileDirs map[string]string) string {
 	}
 	// Resolve target to a friendly name
 	targetDir := filepath.Dir(target)
-	if name, ok := profileDirs[targetDir]; ok {
+	if name, ok := rigDirs[targetDir]; ok {
 		return "linked (" + name + ")"
 	}
 	home, _ := claudeHome()
@@ -809,61 +809,61 @@ func countMCPServers(path string) int {
 	return len(cfg.MCPServers)
 }
 
-// cmdUse sets the active profile (for shell alias workflows).
+// cmdUse sets the active rig (for shell alias workflows).
 func cmdUse(args []string) error {
 	if len(args) < 1 {
 		return fmt.Errorf("usage: claude-rig use <name>")
 	}
 	name := args[0]
 
-	dir, err := profileDir(name)
+	dir, err := rigDir(name)
 	if err != nil {
 		return err
 	}
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return fmt.Errorf("profile %q does not exist", name)
+		return fmt.Errorf("rig %q does not exist", name)
 	}
 
-	file, err := activeProfileFile()
+	file, err := activeRigFile()
 	if err != nil {
 		return err
 	}
 	if err := os.WriteFile(file, []byte(name), 0644); err != nil {
-		return fmt.Errorf("writing active profile: %w", err)
+		return fmt.Errorf("writing active rig: %w", err)
 	}
 
-	fmt.Printf("Active profile: %s\n", name)
+	fmt.Printf("Active rig: %s\n", name)
 	fmt.Printf("Launch with: CLAUDE_CONFIG_DIR=%s claude\n", dir)
 	return nil
 }
 
-// cmdCurrent shows the active profile.
+// cmdCurrent shows the active rig.
 func cmdCurrent() error {
-	active := getActiveProfile()
+	active := getActiveRig()
 	if active == "" {
-		fmt.Println("No active profile set. Use: claude-rig use <name>")
+		fmt.Println("No active rig set. Use: claude-rig use <name>")
 	} else {
 		fmt.Println(active)
 	}
 	return nil
 }
 
-// cmdDelete removes a profile directory.
+// cmdDelete removes a rig directory.
 func cmdDelete(args []string) error {
 	if len(args) < 1 {
 		return fmt.Errorf("usage: claude-rig delete <name>")
 	}
 	name := args[0]
 
-	dir, err := profileDir(name)
+	dir, err := rigDir(name)
 	if err != nil {
 		return err
 	}
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return fmt.Errorf("profile %q does not exist", name)
+		return fmt.Errorf("rig %q does not exist", name)
 	}
 
-	fmt.Printf("Delete profile %q and all its settings/skills/plugins? [y/N] ", name)
+	fmt.Printf("Delete rig %q and all its settings/skills/plugins? [y/N] ", name)
 	var confirm string
 	fmt.Scanln(&confirm)
 	if strings.ToLower(confirm) != "y" {
@@ -873,20 +873,20 @@ func cmdDelete(args []string) error {
 
 	// Only remove real files, not symlink targets
 	if err := os.RemoveAll(dir); err != nil {
-		return fmt.Errorf("removing profile: %w", err)
+		return fmt.Errorf("removing rig: %w", err)
 	}
 
 	// Clear active if this was it
-	if getActiveProfile() == name {
-		file, _ := activeProfileFile()
+	if getActiveRig() == name {
+		file, _ := activeRigFile()
 		os.Remove(file)
 	}
 
-	fmt.Printf("Deleted profile %q\n", name)
+	fmt.Printf("Deleted rig %q\n", name)
 	return nil
 }
 
-// cmdLaunch starts Claude Code with the specified profile's config dir.
+// cmdLaunch starts Claude Code with the specified rig's config dir.
 func cmdLaunch(args []string) error {
 	var name string
 	var extraArgs []string
@@ -896,29 +896,29 @@ func cmdLaunch(args []string) error {
 		name = args[0]
 		extraArgs = args[1:]
 	} else {
-		// No profile name — try RC file
-		profile, path, err := findRC()
+		// No rig name — try RC file
+		rig, path, err := findRC()
 		if err != nil {
 			return err
 		}
-		if profile == "" {
+		if rig == "" {
 			return fmt.Errorf("usage: claude-rig launch <name> [claude-args...]")
 		}
-		name = profile
+		name = rig
 		rcPath = path
 		extraArgs = args // all args are claude args
 	}
 
-	dir, err := profileDir(name)
+	dir, err := rigDir(name)
 	if err != nil {
 		return err
 	}
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return fmt.Errorf("profile %q does not exist", name)
+		return fmt.Errorf("rig %q does not exist", name)
 	}
 
 	if rcPath != "" {
-		fmt.Fprintf(os.Stderr, "Using profile %q from %s\n", name, rcPath)
+		fmt.Fprintf(os.Stderr, "Using rig %q from %s\n", name, rcPath)
 	}
 
 	// Refresh shared symlinks in case new files appeared in ~/.claude/
@@ -926,8 +926,8 @@ func cmdLaunch(args []string) error {
 		fmt.Fprintf(os.Stderr, "Warning: could not sync shared symlinks: %v\n", err)
 	}
 
-	// Set active profile marker
-	file, _ := activeProfileFile()
+	// Set active rig marker
+	file, _ := activeRigFile()
 	os.WriteFile(file, []byte(name), 0644)
 
 	binary := claudeCodeBinary()
@@ -936,7 +936,7 @@ func cmdLaunch(args []string) error {
 		return fmt.Errorf("claude binary not found: %w (set CLAUDE_BINARY to override)", err)
 	}
 
-	// Load default args: per-profile takes precedence, then global
+	// Load default args: per-rig takes precedence, then global
 	defaultArgs := loadLaunchArgs(dir)
 	if defaultArgs == nil {
 		rig, _ := rigHome()
@@ -953,7 +953,7 @@ func cmdLaunch(args []string) error {
 }
 
 // findRC walks from cwd up to $HOME looking for a .claude-rig file.
-func findRC() (profile string, path string, err error) {
+func findRC() (rig string, path string, err error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", "", err
@@ -967,11 +967,11 @@ func findRC() (profile string, path string, err error) {
 	for {
 		candidate := filepath.Join(dir, ".claude-rig")
 		if _, err := os.Stat(candidate); err == nil {
-			profile, err := parseRC(candidate)
+			rig, err := parseRC(candidate)
 			if err != nil {
 				return "", candidate, err
 			}
-			return profile, candidate, nil
+			return rig, candidate, nil
 		}
 
 		if dir == home {
@@ -1015,37 +1015,37 @@ func parseRC(path string) (string, error) {
 // cmdRC shows or creates a .claude-rig file in the current directory.
 func cmdRC(args []string) error {
 	if len(args) == 0 {
-		profile, path, err := findRC()
+		rig, path, err := findRC()
 		if err != nil {
 			return err
 		}
-		if profile == "" {
+		if rig == "" {
 			fmt.Println("No .claude-rig file found")
 			return nil
 		}
-		fmt.Printf("Profile %q from %s\n", profile, path)
+		fmt.Printf("Rig %q from %s\n", rig, path)
 		return nil
 	}
 
 	name := args[0]
-	dir, err := profileDir(name)
+	dir, err := rigDir(name)
 	if err != nil {
 		return err
 	}
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return fmt.Errorf("profile %q does not exist", name)
+		return fmt.Errorf("rig %q does not exist", name)
 	}
 
 	if err := os.WriteFile(".claude-rig", []byte("rig="+name+"\n"), 0644); err != nil {
 		return fmt.Errorf("writing .claude-rig: %w", err)
 	}
-	fmt.Printf("Created .claude-rig with profile %q\n", name)
+	fmt.Printf("Created .claude-rig with rig %q\n", name)
 	return nil
 }
 
 // --- helpers ---
 
-func linkAuthFiles(profileDir string) error {
+func linkAuthFiles(rigDir string) error {
 	home, err := claudeHome()
 	if err != nil {
 		return err
@@ -1066,7 +1066,7 @@ func linkAuthFiles(profileDir string) error {
 		if _, err := os.Stat(target); os.IsNotExist(err) {
 			continue
 		}
-		linkPath := filepath.Join(profileDir, item)
+		linkPath := filepath.Join(rigDir, item)
 		if info, err := os.Lstat(linkPath); err == nil {
 			if info.Mode()&os.ModeSymlink != 0 {
 				dest, _ := os.Readlink(linkPath)
@@ -1083,7 +1083,7 @@ func linkAuthFiles(profileDir string) error {
 	}
 
 	// Clean up .claude.json backups that may hold stale auth data
-	cleanAuthBackups(profileDir)
+	cleanAuthBackups(rigDir)
 	return nil
 }
 
@@ -1100,19 +1100,19 @@ func loadLaunchArgs(dir string) []string {
 	return strings.Fields(line)
 }
 
-func cleanAuthBackups(profileDir string) {
-	entries, err := os.ReadDir(profileDir)
+func cleanAuthBackups(rigDir string) {
+	entries, err := os.ReadDir(rigDir)
 	if err != nil {
 		return
 	}
 	for _, e := range entries {
 		if strings.HasPrefix(e.Name(), ".claude.json.backup.") {
-			os.Remove(filepath.Join(profileDir, e.Name()))
+			os.Remove(filepath.Join(rigDir, e.Name()))
 		}
 	}
 }
 
-func syncSharedSymlinks(profileDir string) error {
+func syncSharedSymlinks(rigDir string) error {
 	home, err := claudeHome()
 	if err != nil {
 		return err
@@ -1129,12 +1129,12 @@ func syncSharedSymlinks(profileDir string) error {
 	for _, e := range entries {
 		name := e.Name()
 
-		// Skip profile-specific items and hidden files
-		if isProfileSpecific(name) || strings.HasPrefix(name, ".") {
+		// Skip rig-specific items and hidden files
+		if isRigSpecific(name) || strings.HasPrefix(name, ".") {
 			continue
 		}
 
-		linkPath := filepath.Join(profileDir, name)
+		linkPath := filepath.Join(rigDir, name)
 		target := filepath.Join(home, name)
 
 		// Skip if something already exists at this path
@@ -1149,8 +1149,8 @@ func syncSharedSymlinks(profileDir string) error {
 	return nil
 }
 
-func getActiveProfile() string {
-	file, err := activeProfileFile()
+func getActiveRig() string {
+	file, err := activeRigFile()
 	if err != nil {
 		return ""
 	}
@@ -1161,15 +1161,15 @@ func getActiveProfile() string {
 	return strings.TrimSpace(string(data))
 }
 
-func validateProfileName(name string) error {
+func validateRigName(name string) error {
 	if name == "" {
-		return fmt.Errorf("profile name cannot be empty")
+		return fmt.Errorf("rig name cannot be empty")
 	}
 	if strings.ContainsAny(name, "/\\. ") {
-		return fmt.Errorf("profile name cannot contain slashes, dots, or spaces")
+		return fmt.Errorf("rig name cannot contain slashes, dots, or spaces")
 	}
 	if strings.HasPrefix(name, "-") {
-		return fmt.Errorf("profile name cannot start with a dash")
+		return fmt.Errorf("rig name cannot start with a dash")
 	}
 	return nil
 }

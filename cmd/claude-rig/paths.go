@@ -6,9 +6,9 @@ import (
 	"runtime"
 )
 
-// profileSpecificItems are directories/files that are unique per profile.
+// rigSpecificItems are directories/files that are unique per rig.
 // Everything else in ~/.claude/ is shared via symlinks.
-var profileSpecificItems = []string{
+var rigSpecificItems = []string{
 	"settings.json",
 	"skills",
 	"plugins",
@@ -26,9 +26,9 @@ var authItems = []string{
 	"statsig",
 }
 
-// sharedItems are explicitly symlinked from the canonical ~/.claude/ into each profile.
-// This list is discovered dynamically at profile creation time — anything in ~/.claude/
-// that is NOT profile-specific gets symlinked.
+// sharedItems are explicitly symlinked from the canonical ~/.claude/ into each rig.
+// This list is discovered dynamically at rig creation time — anything in ~/.claude/
+// that is NOT rig-specific gets symlinked.
 
 func claudeHome() (string, error) {
 	if env := os.Getenv("CLAUDE_CONFIG_DIR"); env != "" {
@@ -50,23 +50,31 @@ func rigHome() (string, error) {
 	return filepath.Join(home, ".claude-rig"), nil
 }
 
-func profilesRoot() (string, error) {
+func rigsRoot() (string, error) {
 	rig, err := rigHome()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(rig, "profiles"), nil
+	rigsDir := filepath.Join(rig, "rigs")
+	// Auto-migrate from old "profiles" directory
+	oldDir := filepath.Join(rig, "profiles")
+	if _, err := os.Stat(oldDir); err == nil {
+		if _, err := os.Stat(rigsDir); os.IsNotExist(err) {
+			os.Rename(oldDir, rigsDir)
+		}
+	}
+	return rigsDir, nil
 }
 
-func profileDir(name string) (string, error) {
-	root, err := profilesRoot()
+func rigDir(name string) (string, error) {
+	root, err := rigsRoot()
 	if err != nil {
 		return "", err
 	}
 	return filepath.Join(root, name), nil
 }
 
-func activeProfileFile() (string, error) {
+func activeRigFile() (string, error) {
 	rig, err := rigHome()
 	if err != nil {
 		return "", err
@@ -74,8 +82,8 @@ func activeProfileFile() (string, error) {
 	return filepath.Join(rig, ".active"), nil
 }
 
-func isProfileSpecific(name string) bool {
-	for _, item := range profileSpecificItems {
+func isRigSpecific(name string) bool {
+	for _, item := range rigSpecificItems {
 		if name == item {
 			return true
 		}
