@@ -456,9 +456,10 @@ func cmdCreate(args []string) error {
 }
 
 // cmdClone duplicates a rig. Symlinks are recreated, real files are copied.
+// Use "default" as source to clone from ~/.claude/.
 func cmdClone(args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: claude-rig clone <source> <dest> [--link-auth]")
+		return fmt.Errorf("usage: claude-rig clone <source|default> <dest> [--link-auth]")
 	}
 
 	var positional []string
@@ -471,20 +472,12 @@ func cmdClone(args []string) error {
 		}
 	}
 	if len(positional) < 2 {
-		return fmt.Errorf("usage: claude-rig clone <source> <dest> [--link-auth]")
+		return fmt.Errorf("usage: claude-rig clone <source|default> <dest> [--link-auth]")
 	}
 	srcName, destName := positional[0], positional[1]
 
 	if err := validateRigName(destName); err != nil {
 		return err
-	}
-
-	srcDir, err := rigDir(srcName)
-	if err != nil {
-		return err
-	}
-	if _, err := os.Stat(srcDir); os.IsNotExist(err) {
-		return fmt.Errorf("rig %q does not exist", srcName)
 	}
 
 	destDir, err := rigDir(destName)
@@ -495,9 +488,23 @@ func cmdClone(args []string) error {
 		return fmt.Errorf("rig %q already exists", destName)
 	}
 
-	if err := cloneDir(srcDir, destDir); err != nil {
-		os.RemoveAll(destDir) // clean up partial clone
-		return fmt.Errorf("cloning rig: %w", err)
+	if srcName == "default" {
+		if err := cloneFromDefault(destDir); err != nil {
+			os.RemoveAll(destDir)
+			return fmt.Errorf("cloning from default: %w", err)
+		}
+	} else {
+		srcDir, err := rigDir(srcName)
+		if err != nil {
+			return err
+		}
+		if _, err := os.Stat(srcDir); os.IsNotExist(err) {
+			return fmt.Errorf("rig %q does not exist", srcName)
+		}
+		if err := cloneDir(srcDir, destDir); err != nil {
+			os.RemoveAll(destDir)
+			return fmt.Errorf("cloning rig: %w", err)
+		}
 	}
 
 	if linkAuth {
@@ -510,6 +517,63 @@ func cmdClone(args []string) error {
 	fmt.Printf("Cloned %q → %q\n", srcName, destName)
 	fmt.Printf("Launch with: claude-rig launch %s\n", destName)
 	return nil
+}
+
+// cloneFromDefault creates a new rig by copying rig-specific items from ~/.claude/
+// and symlinking everything else.
+func cloneFromDefault(destDir string) error {
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	srcDir := filepath.Join(userHome, ".claude")
+	if _, err := os.Stat(srcDir); os.IsNotExist(err) {
+		return fmt.Errorf("~/.claude/ does not exist")
+	}
+
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return err
+	}
+
+	// Copy rig-specific items from ~/.claude/
+	for _, item := range rigSpecificItems {
+		srcPath := filepath.Join(srcDir, item)
+		destPath := filepath.Join(destDir, item)
+
+		info, err := os.Stat(srcPath)
+		if os.IsNotExist(err) {
+			// Item doesn't exist in default — create empty
+			switch {
+			case strings.HasSuffix(item, ".json"):
+				os.WriteFile(destPath, []byte("{}\n"), 0644)
+			case strings.HasSuffix(item, ".md"):
+				os.WriteFile(destPath, []byte(""), 0644)
+			default:
+				os.MkdirAll(destPath, 0755)
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+
+		if info.IsDir() {
+			if err := cloneDir(srcPath, destPath); err != nil {
+				return err
+			}
+		} else {
+			data, err := os.ReadFile(srcPath)
+			if err != nil {
+				return err
+			}
+			if err := os.WriteFile(destPath, data, info.Mode()); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Symlink shared items from ~/.claude/
+	return syncSharedSymlinks(destDir)
 }
 
 // cloneDir recursively copies a directory. Symlinks are recreated, files are copied.

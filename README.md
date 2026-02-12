@@ -64,11 +64,16 @@ claude-rig init
 # Create your first rig
 claude-rig create minimal
 
-# Create another with shared auth (skip onboarding)
-claude-rig create webdev --link-auth
+# Or clone your existing ~/.claude/ config as a starting point
+claude-rig clone default webdev --link-auth
 
-# Launch
+# Launch explicitly
 claude-rig launch webdev
+
+# Or bind to a project and just run claude-rig
+cd ~/projects/my-app
+claude-rig rc webdev
+claude-rig                # picks up the rig automatically
 ```
 
 ## Rig-Specific Instructions
@@ -82,19 +87,27 @@ Each rig has its own `CLAUDE.md` for rig-specific instructions. Your global `~/.
 
 This means you can give each rig its own personality, tool preferences, or coding conventions without duplicating your global setup.
 
-## Project Binding
+## Per-Project Rigs
 
-Bind a rig to a project directory so you never have to type the name:
+Drop a `.claude-rig` file in any project and it automatically uses the right rig:
 
 ```bash
+# One-time setup per project
 cd ~/projects/my-app
-claude-rig rc webdev
+claude-rig rc webdev      # creates .claude-rig with rig=webdev
 
-# From now on, just run:
+# From now on — no flags, no rig names, just:
 claude-rig
 ```
 
-The `.claude-rig` file is inherited by subdirectories, so the whole project tree uses the same rig.
+That's it. The file contains one line (`rig=webdev`) and walks up the directory tree, so every subdirectory inherits it. Different projects, different rigs, zero friction:
+
+```
+~/projects/
+    my-webapp/.claude-rig    → rig=fullstack
+    cli-tool/.claude-rig     → rig=minimal
+    experiment/.claude-rig   → rig=sandbox
+```
 
 ## Shell Integration
 
@@ -131,7 +144,7 @@ alias claude-webdev='claude-rig launch webdev'
 |---|---|
 | `init` | Initialize claude-rig and install shell integration |
 | `create <name>` | Create a new rig (`--link-auth` to reuse existing auth) |
-| `clone <src> <dest>` | Clone a rig (`--link-auth` to share auth) |
+| `clone <src\|default> <dest>` | Clone a rig or `~/.claude/` config (`--link-auth` to share auth) |
 | `delete <name>` | Delete a rig |
 | `list` | List all rigs with auth status and item counts |
 | `launch [name] [args]` | Launch Claude Code with a rig |
@@ -174,6 +187,18 @@ Two Claude Code instances with different rigs run simultaneously without conflic
 - **Linux** — Full support
 - **macOS** — Full support
 - **Windows** — Requires Developer Mode (for symlinks)
+
+## Also Check Out
+
+More open-source tools for the Claude Code workflow:
+
+| Project | Description |
+|---|---|
+| [tokenlean](https://github.com/edimuj/tokenlean) | Lean CLI tools for AI agents — reduce context, save tokens |
+| [claude-mneme](https://github.com/edimuj/claude-mneme) | Automatic session memory — every session picks up where the last left off |
+| [vexscan](https://github.com/edimuj/vexscan) | Security scanner for AI agent plugins, skills, MCPs, and configs |
+| [claude-workshop](https://github.com/edimuj/claude-workshop) | Collection of useful plugins and tools for Claude Code |
+| [claude-simple-status](https://github.com/edimuj/claude-simple-status) | No-frills statusline showing model, context, and quota usage |
 
 ## Development
 

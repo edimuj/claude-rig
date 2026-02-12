@@ -97,7 +97,7 @@ Usage:
 Commands:
   create <name>           Create a new rig
     --link-auth            Symlink auth from existing ~/.claude/ (skip onboarding)
-  clone <src> <dest>      Clone a rig (--link-auth to use shared auth)
+  clone <src|default> <dest>  Clone a rig or ~/.claude/ config (--link-auth to share auth)
   link-auth <name>        Link rig to shared auth (--from <rig> for cross-rig)
   unlink-auth <name>      Remove shared auth, rig will use its own
   list                    List all rigs and show active one
