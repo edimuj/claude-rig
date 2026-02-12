@@ -4,40 +4,47 @@
 
 # claude-rig
 
-Manage multiple Claude Code configuration rigs with full isolation for concurrent use.
+**Run multiple Claude Code configurations side by side.**
 
-Run `claude --rig minimal` in one terminal and `claude --rig webappdev` in another — each with its own settings, skills, plugins, MCP servers, and agents — while sharing authentication, memory, and session history.
+<p align="center">
+  <img src="assets/demo.gif" alt="claude-rig demo" width="800" />
+</p>
 
-## How It Works
+## The Problem
 
-Each rig gets its own config directory under `~/.claude-rig/rigs/`. Rig-specific files (settings, skills, plugins, agents, commands, hooks, MCP config) live as real files in the rig directory. Shared files (CLAUDE.md, credentials, sessions, todos) are symlinked back to `~/.claude/`, so all rigs share authentication and memory.
+Claude Code keeps all configuration in a single `~/.claude/` directory. That's fine until you need:
 
+- **Multiple subscriptions** — Juggling 2–5 Max accounts? You have to log out and back in every time you switch. There's no way to run two subscriptions simultaneously.
+- **API and subscription side by side** — Want API access for one project and your Max subscription for another? Same problem — one config, one auth.
+- **Different tools per project** — Your web project needs Tailwind skills and a database MCP server. Your CLI tool needs none of that. But every Claude Code session loads the same plugins, the same MCP servers, the same hooks.
+- **Testing without risk** — Want to see if a new MCP server is eating your context window or introducing errors? You'd have to disable everything else, test, then re-enable. No way to isolate the experiment.
+
+## What claude-rig Does
+
+Each configuration becomes its own isolated **rig** — with its own settings, skills, plugins, agents, commands, hooks, MCP servers, and instructions. Auth can be shared across rigs or kept separate. Run them side by side in different terminals. No conflicts.
+
+```bash
+# Terminal 1: your Max subscription, minimal setup
+claude --rig=minimal
+
+# Terminal 2: different Max account, full web dev stack
+claude --rig=webdev
+
+# Terminal 3: API access, experimental MCP server you're testing
+claude --rig=experiment
 ```
-~/.claude/                          # Canonical home (shared)
-    CLAUDE.md                       # Personal memory — shared
-    credentials.json                # Auth — shared
-    sessions/                       # History — shared
 
-~/.claude-rig/
-    .active                             # Current rig marker
-    rigs/
-        minimal/
-        settings.json               # Rig-specific
-        skills/                     # Rig-specific
-        plugins/                    # Rig-specific
-        agents/                     # Rig-specific
-        CLAUDE.md → ~/.claude/CLAUDE.md    # Symlink to shared
-    webappdev/
-        settings.json               # Different config
-        skills/                     # Different skills
-        plugins/                    # Different plugins
-        ...
-```
+## What It Doesn't Do
+
+- **Doesn't modify Claude Code.** Uses the official `CLAUDE_CONFIG_DIR` environment variable and `--add-dir` flag. No patches, no forks.
+- **Doesn't manage Claude Code installation.** Install Claude Code separately — claude-rig just manages its configuration.
+- **Doesn't replace project-level config.** Your project's `CLAUDE.md` and `.claude/` still work as normal. Rigs handle user-level configuration.
+- **No external dependencies.** Single Go binary, stdlib only.
 
 ## Install
 
 ```bash
-go install github.com/edimuj/claude-rig/cmd/claude-rig@v0.7.0
+go install github.com/edimuj/claude-rig/cmd/claude-rig@latest
 ```
 
 Or build from source:
@@ -45,8 +52,128 @@ Or build from source:
 ```bash
 git clone https://github.com/edimuj/claude-rig.git
 cd claude-rig
-make build
+make install
 ```
+
+## Quick Start
+
+```bash
+# One-time setup
+claude-rig init
+
+# Create your first rig
+claude-rig create minimal
+
+# Create another with shared auth (skip onboarding)
+claude-rig create webdev --link-auth
+
+# Launch
+claude-rig launch webdev
+```
+
+## Rig-Specific Instructions
+
+Each rig has its own `CLAUDE.md` for rig-specific instructions. Your global `~/.claude/CLAUDE.md` is always loaded alongside it — you don't lose your personal instructions when using a rig.
+
+```
+~/.claude/CLAUDE.md              ← Global instructions (always loaded)
+~/.claude-rig/rigs/webdev/CLAUDE.md  ← Rig-specific additions
+```
+
+This means you can give each rig its own personality, tool preferences, or coding conventions without duplicating your global setup.
+
+## Project Binding
+
+Bind a rig to a project directory so you never have to type the name:
+
+```bash
+cd ~/projects/my-app
+claude-rig rc webdev
+
+# From now on, just run:
+claude-rig
+```
+
+The `.claude-rig` file is inherited by subdirectories, so the whole project tree uses the same rig.
+
+## Shell Integration
+
+Run `claude-rig init` to install a shell wrapper that adds `--rig` support directly to the `claude` command:
+
+```bash
+claude --rig=webdev
+claude --rig=minimal --dangerously-skip-permissions
+```
+
+Or set up simple aliases:
+
+```bash
+alias claude-minimal='claude-rig launch minimal'
+alias claude-webdev='claude-rig launch webdev'
+```
+
+## What's Isolated vs. Shared
+
+| Isolated per rig | Shared across rigs |
+|---|---|
+| `settings.json` | `~/.claude/CLAUDE.md` (global memory) |
+| `CLAUDE.md` (rig instructions) | `credentials.json` (auth) |
+| `skills/` | `sessions/` (history) |
+| `plugins/` | `todos/` |
+| `agents/` | All other `~/.claude/` files |
+| `commands/` | |
+| `hooks/` | |
+| `mcp.json` | |
+
+## Commands
+
+| Command | Description |
+|---|---|
+| `init` | Initialize claude-rig and install shell integration |
+| `create <name>` | Create a new rig (`--link-auth` to reuse existing auth) |
+| `clone <src> <dest>` | Clone a rig (`--link-auth` to share auth) |
+| `delete <name>` | Delete a rig |
+| `list` | List all rigs with auth status and item counts |
+| `launch [name] [args]` | Launch Claude Code with a rig |
+| `use <name>` | Set the active rig |
+| `current` | Show the active rig |
+| `rc [name]` | Show or create `.claude-rig` file for current directory |
+| `link-auth <name>` | Link rig to shared auth (`--from <rig>` for cross-rig) |
+| `unlink-auth <name>` | Remove shared auth so the rig gets its own |
+| `set-args [name] <args>` | Set default launch args (global or per-rig) |
+| `show-args [name]` | Show default launch args |
+| `doctor` | Diagnose broken symlinks and missing items |
+
+## How It Works
+
+Each rig is a full config directory under `~/.claude-rig/rigs/<name>/`:
+
+```
+~/.claude-rig/rigs/webdev/
+    CLAUDE.md               ← Real file (rig-specific instructions)
+    settings.json           ← Real file (rig-specific config)
+    skills/                 ← Real directory
+    plugins/                ← Real directory
+    mcp.json                ← Real file
+    sessions/ → ~/.claude/  ← Symlink (shared history)
+    todos/ → ~/.claude/     ← Symlink (shared)
+    ...
+```
+
+On `launch`, claude-rig:
+
+1. Sets `CLAUDE_CONFIG_DIR` to the rig directory
+2. Loads global `~/.claude/CLAUDE.md` via `--add-dir`
+3. Refreshes symlinks to pick up any new shared files
+4. Replaces itself with Claude Code via `exec` (no wrapper process)
+
+Two Claude Code instances with different rigs run simultaneously without conflicts.
+
+## Platform Support
+
+- **Linux** — Full support
+- **macOS** — Full support
+- **Windows** — Requires Developer Mode (for symlinks)
 
 ## Development
 
@@ -55,128 +182,6 @@ make build                # build binary
 make run ARGS="version"   # run without installing
 make install              # install to ~/go/bin/
 ```
-
-## Quick Start
-
-```bash
-# Initialize the rig system
-claude-rig init
-
-# Create rigs
-claude-rig create minimal
-claude-rig create webappdev
-
-# Launch Claude Code with a specific rig
-claude-rig launch webappdev
-
-# In another terminal, run a different rig simultaneously
-claude-rig launch minimal
-```
-
-## Project Rigs
-
-Bind a rig to a project directory with a `.claude-rig` file so you don't have to type the rig name every time:
-
-```bash
-cd ~/projects/my-app
-
-# Create the .claude-rig file
-claude-rig rc webappdev
-
-# Now just run claude-rig — it picks up the rig automatically
-claude-rig
-```
-
-The file is a simple key=value format:
-
-```
-rig=webappdev
-```
-
-Lookup walks from the current directory up to `$HOME`, so subdirectories inherit the project's rig. Both `claude-rig` (no subcommand) and `claude-rig launch` (no rig arg) will use the RC file. An explicit `claude-rig launch other` still overrides it.
-
-## Commands
-
-| Command | Description |
-|---|---|
-| `init` | Initialize the rig system (`~/.claude-rig/rigs/`) |
-| `create <name>` | Create a new rig (`--link-auth` to reuse existing auth) |
-| `clone <src> <dest>` | Clone a rig (`--link-auth` to use shared auth) |
-| `link-auth <name>` | Link rig to shared auth (`--from <rig>` for cross-rig) |
-| `unlink-auth <name>` | Remove shared auth, rig will use its own |
-| `list` | List all rigs with auth status and item counts |
-| `use <name>` | Set the active rig |
-| `current` | Show currently active rig |
-| `delete <name>` | Delete a rig (with confirmation) |
-| `launch [name] [args]` | Launch Claude Code with the given rig (or from `.claude-rig` file) |
-| `rc [name]` | Show or create `.claude-rig` file for current directory |
-| `set-args [name] <args>` | Set default launch args (global if no name, per-rig if given) |
-| `show-args [name]` | Show default launch args |
-| `doctor` | Check rigs for broken symlinks and missing items |
-
-## Shell Integration
-
-Add to `~/.bashrc` or `~/.zshrc`:
-
-```bash
-# Quick aliases per rig
-alias claude-minimal='claude-rig launch minimal'
-alias claude-webdev='claude-rig launch webappdev'
-
-# Or a wrapper that supports --rig=<name>
-claude() {
-  for arg in "$@"; do
-    if [[ "$arg" == --rig=* ]]; then
-      claude-rig launch "${arg#--rig=}" "${@//$arg/}"
-      return
-    fi
-  done
-  command claude "$@"
-}
-```
-
-Then use naturally:
-
-```bash
-claude --rig=webappdev
-claude --rig=minimal --dangerously-skip-permissions
-```
-
-## What's Isolated vs. Shared
-
-| Isolated per rig | Shared across rigs |
-|---|---|
-| `settings.json` | `CLAUDE.md` (memory) |
-| `skills/` | `credentials.json` (auth) |
-| `plugins/` | `sessions/` (history) |
-| `agents/` | `todos/` |
-| `commands/` | All other files |
-| `hooks/` | |
-| `mcp.json` | |
-
-## Environment Variables
-
-| Variable | Description |
-|---|---|
-| `CLAUDE_BINARY` | Override the Claude Code binary name/path |
-| `CLAUDE_CONFIG_DIR` | (Used internally — set automatically by launch) |
-
-## How It Works Under the Hood
-
-The tool leverages Claude Code's `CLAUDE_CONFIG_DIR` environment variable. Each rig is a full config directory where:
-
-1. **Rig-specific files** are real files unique to each rig
-2. **Shared files** are symlinks pointing back to `~/.claude/`
-3. On `launch`, symlinks are refreshed to pick up any new shared files
-4. Claude Code is exec'd with `CLAUDE_CONFIG_DIR` pointing to the rig directory
-
-This means two Claude Code instances with different rigs can run simultaneously without any conflicts.
-
-## Platform Support
-
-- **Linux**: Full support
-- **macOS**: Full support
-- **Windows**: Requires Developer Mode enabled (for symlink support)
 
 ## License
 
