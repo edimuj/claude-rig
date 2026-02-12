@@ -418,16 +418,19 @@ func cmdCreate(args []string) error {
 		return fmt.Errorf("creating rig directory: %w", err)
 	}
 
-	// Create rig-specific directories
+	// Create rig-specific items
 	for _, item := range rigSpecificItems {
 		path := filepath.Join(dir, item)
-		if strings.HasSuffix(item, ".json") {
-			// Create empty JSON files
+		switch {
+		case strings.HasSuffix(item, ".json"):
 			if err := os.WriteFile(path, []byte("{}\n"), 0644); err != nil {
 				return fmt.Errorf("creating %s: %w", item, err)
 			}
-		} else {
-			// Create directories
+		case strings.HasSuffix(item, ".md"):
+			if err := os.WriteFile(path, []byte(""), 0644); err != nil {
+				return fmt.Errorf("creating %s: %w", item, err)
+			}
+		default:
 			if err := os.MkdirAll(path, 0755); err != nil {
 				return fmt.Errorf("creating %s/: %w", item, err)
 			}
@@ -946,6 +949,21 @@ func cmdLaunch(args []string) error {
 	// Replace this process with claude, passing the config dir via env
 	env := os.Environ()
 	env = setEnv(env, "CLAUDE_CONFIG_DIR", dir)
+
+	// Migrate legacy symlinked CLAUDE.md to real file
+	claudeMD := filepath.Join(dir, "CLAUDE.md")
+	if info, err := os.Lstat(claudeMD); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		os.Remove(claudeMD)
+		os.WriteFile(claudeMD, []byte(""), 0644)
+	}
+
+	// Always load global ~/.claude/ CLAUDE.md via --add-dir
+	userHome, _ := os.UserHomeDir()
+	if userHome != "" {
+		canonicalClaudeHome := filepath.Join(userHome, ".claude")
+		env = setEnv(env, "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD", "1")
+		extraArgs = append(extraArgs, "--add-dir", canonicalClaudeHome)
+	}
 
 	execArgs := append([]string{binary}, defaultArgs...)
 	execArgs = append(execArgs, extraArgs...)

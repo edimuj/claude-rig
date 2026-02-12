@@ -16,6 +16,7 @@ var rigSpecificItems = []string{
 	"commands",
 	"hooks",
 	"mcp.json",
+	"CLAUDE.md",
 }
 
 // authItems are files/directories needed to skip onboarding and reuse existing auth.
