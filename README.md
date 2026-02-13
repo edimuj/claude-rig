@@ -165,6 +165,7 @@ Each rig gets its own `.claude.json` seeded from the global config on creation. 
 | `unlink-auth <name>` | Remove shared auth so the rig gets its own |
 | `set-args [name] <args>` | Set default launch args (global or per-rig) |
 | `show-args [name]` | Show default launch args |
+| `update-plugins [rigs]` | Update marketplace plugins across rigs (all if none specified) |
 | `doctor` | Diagnose broken symlinks and missing items |
 
 ## How It Works
