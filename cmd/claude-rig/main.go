@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"runtime/debug"
+	"strings"
 )
 
 // version is set at build time via -ldflags "-X main.version=..."
@@ -77,6 +78,21 @@ func main() {
 	case "help", "--help", "-h":
 		printUsage()
 	default:
+		// Flag-like first arg (e.g., --resume) — try RC-based launch, forwarding all args to claude
+		if strings.HasPrefix(cmd, "-") {
+			rig, _, err := findRC()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			if rig != "" {
+				err = cmdLaunch(os.Args[1:])
+				break
+			}
+			fmt.Fprintf(os.Stderr, "Unknown flag %q and no .claude-rig file found\n\n", cmd)
+			printUsage()
+			os.Exit(1)
+		}
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", cmd)
 		printUsage()
 		os.Exit(1)
@@ -121,6 +137,7 @@ Examples:
   claude-rig list                    # See all rigs
   claude-rig rc minimal              # Bind current directory to a rig
   claude-rig                         # Auto-launch from .claude-rig file
+  claude-rig --resume <id>           # Auto-launch and forward flags to claude
 
 Shell integration (add to ~/.bashrc or ~/.zshrc):
   alias claude-minimal='claude-rig launch minimal'
