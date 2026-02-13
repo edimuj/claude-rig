@@ -1139,6 +1139,129 @@ func cmdRC(args []string) error {
 	return nil
 }
 
+// cmdUpdatePlugins refreshes marketplaces and updates all installed plugins across rigs.
+func cmdUpdatePlugins(args []string) error {
+	root, err := rigsRoot()
+	if err != nil {
+		return err
+	}
+
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Println("No rigs found. Run: claude-rig init")
+			return nil
+		}
+		return err
+	}
+
+	// Determine which rigs to update
+	var rigNames []string
+	if len(args) > 0 {
+		for _, name := range args {
+			dir := filepath.Join(root, name)
+			if _, err := os.Stat(dir); os.IsNotExist(err) {
+				return fmt.Errorf("rig %q does not exist", name)
+			}
+			rigNames = append(rigNames, name)
+		}
+	} else {
+		for _, e := range entries {
+			if e.IsDir() {
+				rigNames = append(rigNames, e.Name())
+			}
+		}
+	}
+
+	if len(rigNames) == 0 {
+		fmt.Println("No rigs found.")
+		return nil
+	}
+
+	claudeBin := claudeCodeBinary()
+	var hadErrors bool
+
+	for _, name := range rigNames {
+		dir := filepath.Join(root, name)
+		fmt.Printf("\n── %s ──\n", name)
+
+		// Refresh marketplaces
+		fmt.Print("  Updating marketplaces... ")
+		if out, err := runClaudePlugin(claudeBin, dir, "marketplace", "update"); err != nil {
+			fmt.Printf("FAILED\n    %s\n", lastLine(out))
+			hadErrors = true
+			continue
+		} else {
+			fmt.Println(lastLine(out))
+		}
+
+		// Get installed plugins
+		out, err := runClaudePlugin(claudeBin, dir, "list", "--json")
+		if err != nil {
+			fmt.Printf("  Could not list plugins: %s\n", lastLine(out))
+			hadErrors = true
+			continue
+		}
+
+		var plugins []struct {
+			ID      string `json:"id"`
+			Version string `json:"version"`
+		}
+		if err := json.Unmarshal([]byte(out), &plugins); err != nil {
+			fmt.Printf("  Could not parse plugin list: %v\n", err)
+			hadErrors = true
+			continue
+		}
+
+		if len(plugins) == 0 {
+			fmt.Println("  No plugins installed")
+			continue
+		}
+
+		// Update each plugin
+		for _, p := range plugins {
+			fmt.Printf("  %-40s ", p.ID)
+			if out, err := runClaudePlugin(claudeBin, dir, "update", p.ID); err != nil {
+				fmt.Printf("FAILED: %s\n", lastLine(out))
+				hadErrors = true
+			} else {
+				fmt.Println(lastLine(out))
+			}
+		}
+	}
+
+	if hadErrors {
+		fmt.Println("\nSome updates failed. Check the output above.")
+	} else {
+		fmt.Println("\nAll plugins up to date.")
+	}
+	return nil
+}
+
+// runClaudePlugin runs a `claude plugin` subcommand with CLAUDE_CONFIG_DIR set to the rig directory.
+func runClaudePlugin(claudeBin, rigDir string, pluginArgs ...string) (string, error) {
+	args := append([]string{"plugin"}, pluginArgs...)
+	cmd := exec.Command(claudeBin, args...)
+
+	// Build env: inherit current, set CLAUDE_CONFIG_DIR, unset CLAUDECODE (nesting guard)
+	env := os.Environ()
+	env = setEnv(env, "CLAUDE_CONFIG_DIR", rigDir)
+	env = removeEnv(env, "CLAUDECODE")
+	cmd.Env = env
+
+	out, err := cmd.CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}
+
+// lastLine returns the last non-empty line from s (result messages are typically last).
+func lastLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.LastIndexByte(s, '\n'); i >= 0 {
+		return strings.TrimSpace(s[i+1:])
+	}
+	return s
+}
+
 // --- helpers ---
 
 func linkAuthFiles(rigDir string) error {

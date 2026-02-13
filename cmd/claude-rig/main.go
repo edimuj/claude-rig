@@ -71,6 +71,8 @@ func main() {
 		err = cmdShowArgs(args)
 	case "rc":
 		err = cmdRC(args)
+	case "update-plugins":
+		err = cmdUpdatePlugins(args)
 	case "doctor":
 		err = cmdDoctor()
 	case "version", "--version", "-v":
@@ -124,6 +126,7 @@ Commands:
   rc [name]               Show or set .claude-rig file for current directory
   set-args [name] <args>  Set default launch args (global if no name, per-rig if given)
   show-args [name]        Show default launch args
+  update-plugins [rigs]   Update marketplace plugins (all rigs if none given)
   doctor                  Check rigs for broken symlinks and missing items
   init                    Initialize rig system (run once)
   version                 Show version
