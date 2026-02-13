@@ -993,6 +993,27 @@ func cmdLaunch(args []string) error {
 		fmt.Fprintf(os.Stderr, "Warning: could not sync shared symlinks: %v\n", err)
 	}
 
+	// Ensure rig has mcp.json; symlink it as .mcp.json in cwd so
+	// Claude Code picks it up as project-level MCP config.
+	rigMCP := filepath.Join(dir, "mcp.json")
+	if _, err := os.Stat(rigMCP); os.IsNotExist(err) {
+		os.WriteFile(rigMCP, []byte("{\"mcpServers\": {}}\n"), 0644)
+	}
+	cwd, _ := os.Getwd()
+	if cwd != "" {
+		projectMCP := filepath.Join(cwd, ".mcp.json")
+		if info, err := os.Lstat(projectMCP); err != nil {
+			// Doesn't exist — create symlink
+			os.Symlink(rigMCP, projectMCP)
+		} else if info.Mode()&os.ModeSymlink != 0 {
+			// Existing symlink (ours from a previous launch) — replace
+			os.Remove(projectMCP)
+			os.Symlink(rigMCP, projectMCP)
+		} else {
+			fmt.Fprintf(os.Stderr, "Warning: %s already exists and is not a symlink; rig MCP config not linked\n", projectMCP)
+		}
+	}
+
 	// Set active rig marker
 	file, _ := activeRigFile()
 	os.WriteFile(file, []byte(name), 0644)
@@ -1013,6 +1034,7 @@ func cmdLaunch(args []string) error {
 	// Replace this process with claude, passing the config dir via env
 	env := os.Environ()
 	env = setEnv(env, "CLAUDE_CONFIG_DIR", dir)
+	env = removeEnv(env, "CLAUDECODE") // allow launching from within a Claude Code shell
 
 	// Migrate legacy symlinked CLAUDE.md to real file
 	claudeMD := filepath.Join(dir, "CLAUDE.md")
@@ -1265,4 +1287,14 @@ func setEnv(env []string, key, value string) []string {
 		}
 	}
 	return append(env, prefix+value)
+}
+
+func removeEnv(env []string, key string) []string {
+	prefix := key + "="
+	for i, e := range env {
+		if strings.HasPrefix(e, prefix) {
+			return append(env[:i], env[i+1:]...)
+		}
+	}
+	return env
 }
