@@ -132,11 +132,15 @@ alias claude-webdev='claude-rig launch webdev'
 | `settings.json` | `~/.claude/CLAUDE.md` (global memory) |
 | `CLAUDE.md` (rig instructions) | `credentials.json` (auth) |
 | `skills/` | `sessions/` (history) |
-| `plugins/` | `todos/` |
+| `plugins/` (enabled set) | `todos/` |
 | `agents/` | All other `~/.claude/` files |
 | `commands/` | |
 | `hooks/` | |
 | `mcp.json` | |
+
+> **MCP servers:** Claude Code only discovers MCP config from `~/.claude.json` (global) or `.mcp.json` (project-level) — it does not read MCP config from `CLAUDE_CONFIG_DIR`. To work around this, `claude-rig launch` automatically symlinks the rig's `mcp.json` as `.mcp.json` in the current working directory. If a real `.mcp.json` already exists in the project, it is left untouched and a warning is shown.
+>
+> **Plugins:** Installing a plugin from within a rig session stays within that rig — the plugin cache, manifest, and enablement all go to the rig's config directory. Plugins installed in one rig don't appear in other rigs.
 
 ## Commands
 
@@ -176,9 +180,10 @@ Each rig is a full config directory under `~/.claude-rig/rigs/<name>/`:
 On `launch`, claude-rig:
 
 1. Sets `CLAUDE_CONFIG_DIR` to the rig directory
-2. Loads global `~/.claude/CLAUDE.md` via `--add-dir`
-3. Refreshes symlinks to pick up any new shared files
-4. Replaces itself with Claude Code via `exec` (no wrapper process)
+2. Symlinks the rig's `mcp.json` as `.mcp.json` in the working directory
+3. Loads global `~/.claude/CLAUDE.md` via `--add-dir`
+4. Refreshes symlinks to pick up any new shared files
+5. Replaces itself with Claude Code via `exec` (no wrapper process)
 
 Two Claude Code instances with different rigs run simultaneously without conflicts.
 
