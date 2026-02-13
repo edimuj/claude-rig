@@ -22,6 +22,3 @@ CLAUDE.md
 
 # Claude-Rig file
 .claude-rig
-
-# Generated MCP symlink (created by claude-rig launch)
-.mcp.json

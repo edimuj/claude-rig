@@ -437,6 +437,11 @@ func cmdCreate(args []string) error {
 		}
 	}
 
+	// Seed .claude.json with minimal fields from global config
+	if err := seedClaudeJSON(dir); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not seed .claude.json: %v\n", err)
+	}
+
 	// Symlink shared items from ~/.claude/
 	if err := syncSharedSymlinks(dir); err != nil {
 		return fmt.Errorf("creating shared symlinks: %w", err)
@@ -572,6 +577,31 @@ func cloneFromDefault(destDir string) error {
 		}
 	}
 
+	// Seed .claude.json with onboarding state + MCP from global
+	if err := seedClaudeJSON(destDir); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not seed .claude.json: %v\n", err)
+	}
+
+	// Copy MCP servers from global ~/.claude.json if present
+	globalClaude := filepath.Join(userHome, ".claude.json")
+	if data, err := os.ReadFile(globalClaude); err == nil {
+		var global map[string]any
+		if json.Unmarshal(data, &global) == nil {
+			if mcpServers, ok := global["mcpServers"]; ok {
+				destClaude := filepath.Join(destDir, ".claude.json")
+				if rigData, err := os.ReadFile(destClaude); err == nil {
+					var rigJSON map[string]any
+					if json.Unmarshal(rigData, &rigJSON) == nil {
+						rigJSON["mcpServers"] = mcpServers
+						if out, err := json.MarshalIndent(rigJSON, "", "  "); err == nil {
+							os.WriteFile(destClaude, append(out, '\n'), 0644)
+						}
+					}
+				}
+			}
+		}
+	}
+
 	// Symlink shared items from ~/.claude/
 	return syncSharedSymlinks(destDir)
 }
@@ -652,8 +682,8 @@ func cmdLinkAuth(args []string) error {
 		return fmt.Errorf("rig %q does not exist", name)
 	}
 
-	// Resolve auth source directories
-	var authHome, authUserHome string
+	// Resolve auth source directory
+	var authHome string
 	if fromRig != "" {
 		if fromRig == name {
 			return fmt.Errorf("cannot link auth from a rig to itself")
@@ -665,28 +695,16 @@ func cmdLinkAuth(args []string) error {
 		if _, err := os.Stat(fromDir); os.IsNotExist(err) {
 			return fmt.Errorf("source rig %q does not exist", fromRig)
 		}
-		// All auth items live inside the rig dir
 		authHome = fromDir
-		authUserHome = fromDir
 	} else {
 		authHome, err = claudeHome()
-		if err != nil {
-			return err
-		}
-		authUserHome, err = os.UserHomeDir()
 		if err != nil {
 			return err
 		}
 	}
 
 	for _, item := range authItems {
-		// .claude.json lives in ~ when linking from default, but inside rig dir when linking from rig
-		sourceDir := authHome
-		if item == ".claude.json" && fromRig == "" {
-			sourceDir = authUserHome
-		}
-
-		target := filepath.Join(sourceDir, item)
+		target := filepath.Join(authHome, item)
 		if _, err := os.Stat(target); os.IsNotExist(err) {
 			continue
 		}
@@ -752,11 +770,6 @@ func cmdUnlinkAuth(args []string) error {
 			os.Remove(linkPath)
 			fmt.Printf("Removed symlink: %s\n", item)
 			removed++
-		} else if item == ".claude.json" {
-			// Real file — remove it so Claude starts fresh
-			os.Remove(linkPath)
-			fmt.Printf("Removed: %s\n", item)
-			removed++
 		}
 	}
 
@@ -816,7 +829,7 @@ func cmdList() error {
 		auth := rigAuthStatus(dir, rigDirs)
 		skills := countDirEntries(filepath.Join(dir, "skills"))
 		plugins := countDirEntries(filepath.Join(dir, "plugins"))
-		mcp := countMCPServers(filepath.Join(dir, "mcp.json"))
+		mcp := countMCPServers(filepath.Join(dir, ".claude.json"))
 
 		fmt.Printf("%s%-20s auth: %-20s skills: %d  plugins: %d  mcp: %d\n",
 			marker, name, auth, skills, plugins, mcp)
@@ -993,27 +1006,6 @@ func cmdLaunch(args []string) error {
 		fmt.Fprintf(os.Stderr, "Warning: could not sync shared symlinks: %v\n", err)
 	}
 
-	// Ensure rig has mcp.json; symlink it as .mcp.json in cwd so
-	// Claude Code picks it up as project-level MCP config.
-	rigMCP := filepath.Join(dir, "mcp.json")
-	if _, err := os.Stat(rigMCP); os.IsNotExist(err) {
-		os.WriteFile(rigMCP, []byte("{\"mcpServers\": {}}\n"), 0644)
-	}
-	cwd, _ := os.Getwd()
-	if cwd != "" {
-		projectMCP := filepath.Join(cwd, ".mcp.json")
-		if info, err := os.Lstat(projectMCP); err != nil {
-			// Doesn't exist — create symlink
-			os.Symlink(rigMCP, projectMCP)
-		} else if info.Mode()&os.ModeSymlink != 0 {
-			// Existing symlink (ours from a previous launch) — replace
-			os.Remove(projectMCP)
-			os.Symlink(rigMCP, projectMCP)
-		} else {
-			fmt.Fprintf(os.Stderr, "Warning: %s already exists and is not a symlink; rig MCP config not linked\n", projectMCP)
-		}
-	}
-
 	// Set active rig marker
 	file, _ := activeRigFile()
 	os.WriteFile(file, []byte(name), 0644)
@@ -1154,19 +1146,9 @@ func linkAuthFiles(rigDir string) error {
 	if err != nil {
 		return err
 	}
-	userHome, err := os.UserHomeDir()
-	if err != nil {
-		return err
-	}
 
 	for _, item := range authItems {
-		// .claude.json lives in ~ rather than ~/.claude/
-		sourceDir := home
-		if item == ".claude.json" {
-			sourceDir = userHome
-		}
-
-		target := filepath.Join(sourceDir, item)
+		target := filepath.Join(home, item)
 		if _, err := os.Stat(target); os.IsNotExist(err) {
 			continue
 		}
@@ -1186,9 +1168,42 @@ func linkAuthFiles(rigDir string) error {
 		}
 	}
 
-	// Clean up .claude.json backups that may hold stale auth data
-	cleanAuthBackups(rigDir)
 	return nil
+}
+
+// seedClaudeJSON creates a minimal .claude.json in the rig directory,
+// seeded from the global ~/.claude.json to skip onboarding.
+func seedClaudeJSON(rigDir string) error {
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+
+	// Read global .claude.json for seed fields
+	globalPath := filepath.Join(userHome, ".claude.json")
+	seed := map[string]any{
+		"hasCompletedOnboarding":                true,
+		"officialMarketplaceAutoInstallAttempted": true,
+		"officialMarketplaceAutoInstalled":        true,
+		"mcpServers":                              map[string]any{},
+	}
+
+	if data, err := os.ReadFile(globalPath); err == nil {
+		var global map[string]any
+		if json.Unmarshal(data, &global) == nil {
+			for _, key := range []string{"oauthAccount", "userID", "lastOnboardingVersion"} {
+				if v, ok := global[key]; ok {
+					seed[key] = v
+				}
+			}
+		}
+	}
+
+	data, err := json.MarshalIndent(seed, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(rigDir, ".claude.json"), append(data, '\n'), 0644)
 }
 
 // loadLaunchArgs reads default launch arguments from a directory's .launch-args file.

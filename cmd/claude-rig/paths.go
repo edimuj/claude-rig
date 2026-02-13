@@ -15,7 +15,6 @@ var rigSpecificItems = []string{
 	"agents",
 	"commands",
 	"hooks",
-	"mcp.json",
 	"CLAUDE.md",
 }
 
@@ -23,7 +22,6 @@ var rigSpecificItems = []string{
 // .claude.json lives in ~ (not ~/.claude/) and holds onboarding/account state.
 var authItems = []string{
 	".credentials.json",
-	".claude.json",
 	"statsig",
 }
 
