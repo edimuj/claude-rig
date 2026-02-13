@@ -100,7 +100,15 @@ claude-rig rc webdev      # creates .claude-rig with rig=webdev
 claude-rig
 ```
 
-That's it. The file contains one line (`rig=webdev`) and walks up the directory tree, so every subdirectory inherits it. Different projects, different rigs, zero friction:
+Any flags are forwarded straight to Claude Code, so you can resume sessions, set prompts, or pass any other flags without specifying the rig name:
+
+```bash
+claude-rig --resume           # resume last session
+claude-rig --resume abc123    # resume a specific session
+claude-rig -p "fix the tests" # pass a prompt
+```
+
+The `.claude-rig` file contains one line (`rig=webdev`) and walks up the directory tree, so every subdirectory inherits it. Different projects, different rigs, zero friction:
 
 ```
 ~/projects/
@@ -149,7 +157,7 @@ Each rig gets its own `.claude.json` seeded from the global config on creation. 
 | `clone <src\|default> <dest>` | Clone a rig or `~/.claude/` config (`--link-auth` to share auth) |
 | `delete <name>` | Delete a rig |
 | `list` | List all rigs with auth status and item counts |
-| `launch [name] [args]` | Launch Claude Code with a rig |
+| `launch [name] [args]` | Launch Claude Code with a rig (flags forwarded to claude) |
 | `use <name>` | Set the active rig |
 | `current` | Show the active rig |
 | `rc [name]` | Show or create `.claude-rig` file for current directory |
