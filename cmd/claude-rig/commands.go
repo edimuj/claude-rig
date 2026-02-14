@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 )
 
@@ -1179,54 +1180,85 @@ func cmdUpdatePlugins(args []string) error {
 	}
 
 	claudeBin := claudeCodeBinary()
-	var hadErrors bool
 
-	for _, name := range rigNames {
-		dir := filepath.Join(root, name)
-		fmt.Printf("\n── %s ──\n", name)
+	type rigResult struct {
+		name   string
+		output string
+		failed bool
+	}
 
-		// Refresh marketplaces
-		fmt.Print("  Updating marketplaces... ")
-		if out, err := runClaudePlugin(claudeBin, dir, "marketplace", "update"); err != nil {
-			fmt.Printf("FAILED\n    %s\n", lastLine(out))
-			hadErrors = true
-			continue
-		} else {
-			fmt.Println(lastLine(out))
-		}
+	results := make([]rigResult, len(rigNames))
+	var wg sync.WaitGroup
 
-		// Get installed plugins
-		out, err := runClaudePlugin(claudeBin, dir, "list", "--json")
-		if err != nil {
-			fmt.Printf("  Could not list plugins: %s\n", lastLine(out))
-			hadErrors = true
-			continue
-		}
+	for i, name := range rigNames {
+		wg.Add(1)
+		go func(idx int, rigName string) {
+			defer wg.Done()
+			dir := filepath.Join(root, rigName)
+			var buf strings.Builder
+			var failed bool
 
-		var plugins []struct {
-			ID      string `json:"id"`
-			Version string `json:"version"`
-		}
-		if err := json.Unmarshal([]byte(out), &plugins); err != nil {
-			fmt.Printf("  Could not parse plugin list: %v\n", err)
-			hadErrors = true
-			continue
-		}
+			fmt.Fprintf(&buf, "\n── %s ──\n", rigName)
 
-		if len(plugins) == 0 {
-			fmt.Println("  No plugins installed")
-			continue
-		}
-
-		// Update each plugin
-		for _, p := range plugins {
-			fmt.Printf("  %-40s ", p.ID)
-			if out, err := runClaudePlugin(claudeBin, dir, "update", p.ID); err != nil {
-				fmt.Printf("FAILED: %s\n", lastLine(out))
-				hadErrors = true
+			// Refresh marketplaces
+			buf.WriteString("  Updating marketplaces... ")
+			if out, err := runClaudePlugin(claudeBin, dir, "marketplace", "update"); err != nil {
+				fmt.Fprintf(&buf, "FAILED\n    %s\n", lastLine(out))
+				failed = true
+				results[idx] = rigResult{rigName, buf.String(), failed}
+				return
 			} else {
-				fmt.Println(lastLine(out))
+				buf.WriteString(lastLine(out) + "\n")
 			}
+
+			// Get installed plugins
+			out, err := runClaudePlugin(claudeBin, dir, "list", "--json")
+			if err != nil {
+				fmt.Fprintf(&buf, "  Could not list plugins: %s\n", lastLine(out))
+				failed = true
+				results[idx] = rigResult{rigName, buf.String(), failed}
+				return
+			}
+
+			var plugins []struct {
+				ID      string `json:"id"`
+				Version string `json:"version"`
+			}
+			if err := json.Unmarshal([]byte(out), &plugins); err != nil {
+				fmt.Fprintf(&buf, "  Could not parse plugin list: %v\n", err)
+				failed = true
+				results[idx] = rigResult{rigName, buf.String(), failed}
+				return
+			}
+
+			if len(plugins) == 0 {
+				buf.WriteString("  No plugins installed\n")
+				results[idx] = rigResult{rigName, buf.String(), false}
+				return
+			}
+
+			// Update each plugin
+			for _, p := range plugins {
+				fmt.Fprintf(&buf, "  %-40s ", p.ID)
+				if out, err := runClaudePlugin(claudeBin, dir, "update", p.ID); err != nil {
+					fmt.Fprintf(&buf, "FAILED: %s\n", lastLine(out))
+					failed = true
+				} else {
+					buf.WriteString(lastLine(out) + "\n")
+				}
+			}
+
+			results[idx] = rigResult{rigName, buf.String(), failed}
+		}(i, name)
+	}
+
+	wg.Wait()
+
+	var hadErrors bool
+	for _, r := range results {
+		fmt.Print(r.output)
+		if r.failed {
+			hadErrors = true
 		}
 	}
 
