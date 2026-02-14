@@ -1187,6 +1187,8 @@ func cmdUpdatePlugins(args []string) error {
 		failed bool
 	}
 
+	fmt.Printf("Updating %d rigs: %s ...\n", len(rigNames), strings.Join(rigNames, ", "))
+
 	results := make([]rigResult, len(rigNames))
 	var wg sync.WaitGroup
 
