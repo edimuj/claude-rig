@@ -199,6 +199,68 @@ Two Claude Code instances with different rigs run simultaneously without conflic
 - **macOS** — Full support
 - **Windows** — Requires Developer Mode (for symlinks)
 
+## Backup & Restore
+
+Your rig configurations live in `~/.claude-rig/`. To version-control and back them up:
+
+```bash
+cd ~/.claude-rig
+git init && git branch -m main
+```
+
+Add a `.gitignore` to skip plugins (reinstallable), auth tokens, and runtime symlinks:
+
+```gitignore
+# Plugins — reinstallable via update-plugins
+rigs/*/plugins/
+
+# Auth tokens and backup files
+rigs/*/.claude.json
+*.backup.*
+
+# Runtime symlinks (recreated by claude-rig)
+rigs/*/cache
+rigs/*/chrome
+rigs/*/conversations
+rigs/*/.credentials.json
+rigs/*/debug
+rigs/*/downloads
+rigs/*/file-history
+rigs/*/history.jsonl
+rigs/*/paste-cache
+rigs/*/personal.md
+rigs/*/plans
+rigs/*/projects
+rigs/*/session-env
+rigs/*/shell-snapshots
+rigs/*/stats-cache.json
+rigs/*/statsig
+rigs/*/statusline
+rigs/*/tasks
+rigs/*/telemetry
+rigs/*/todos
+rigs/*/tokenlean.md
+rigs/*/usage-data
+```
+
+Then commit and push to a private repo:
+
+```bash
+git add -A && git commit -m "rig configurations"
+git remote add origin git@github.com:you/your-rig-config.git
+git push -u origin main
+```
+
+**What gets tracked:** `CLAUDE.md`, `settings.json`, `mcp.json`, `skills/`, `agents/`, `commands/`, `hooks/` — the stuff you'd actually lose.
+
+**Restore on a new machine:**
+
+```bash
+git clone git@github.com:you/your-rig-config.git ~/.claude-rig
+claude-rig link-auth <rig>        # reconnect auth for each rig
+claude-rig update-plugins         # reinstall marketplace plugins
+```
+
 ## Also Check Out
 
 More open-source tools for the Claude Code workflow:
