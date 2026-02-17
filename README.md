@@ -185,6 +185,8 @@ Isolation config lives in `rig.json` inside the rig directory. When an item is i
 | `isolate <rig> <items>` | Isolate items per rig (no sharing via symlinks) |
 | `share <rig> <items>` | Reverse isolation (delete local, recreate symlink) |
 | `isolation [rig]` | Show isolation status for one or all rigs |
+| `export <rig> [file]` | Export rig to `.tar.gz` (`--include-auth`, `--include-data`) |
+| `import <file> <name>` | Import rig from archive (`--link-auth` to link auth after import) |
 | `status [rig]` | Show rig status: disk usage, running sessions, last used |
 | `update-plugins [rigs]` | Update marketplace plugins across rigs (all if none specified) |
 | `doctor` | Diagnose broken symlinks and missing items |
@@ -222,67 +224,28 @@ Two Claude Code instances with different rigs run simultaneously without conflic
 - **macOS** — Full support
 - **Windows** — Requires Developer Mode (for symlinks)
 
-## Backup & Restore
+## Export & Import
 
-Your rig configurations live in `~/.claude-rig/`. To version-control and back them up:
-
-```bash
-cd ~/.claude-rig
-git init && git branch -m main
-```
-
-Add a `.gitignore` to skip plugins (reinstallable), auth tokens, and runtime symlinks:
-
-```gitignore
-# Plugins — reinstallable via update-plugins
-rigs/*/plugins/
-
-# Auth tokens and backup files
-rigs/*/.claude.json
-*.backup.*
-
-# Runtime symlinks (recreated by claude-rig)
-rigs/*/cache
-rigs/*/chrome
-rigs/*/conversations
-rigs/*/.credentials.json
-rigs/*/debug
-rigs/*/downloads
-rigs/*/file-history
-rigs/*/history.jsonl
-rigs/*/paste-cache
-rigs/*/personal.md
-rigs/*/plans
-rigs/*/projects
-rigs/*/session-env
-rigs/*/shell-snapshots
-rigs/*/stats-cache.json
-rigs/*/statsig
-rigs/*/statusline
-rigs/*/tasks
-rigs/*/telemetry
-rigs/*/todos
-rigs/*/tokenlean.md
-rigs/*/usage-data
-```
-
-Then commit and push to a private repo:
+Portable `.tar.gz` archives for backup, machine migration, or sharing setups with teammates.
 
 ```bash
-git add -A && git commit -m "rig configurations"
-git remote add origin git@github.com:you/your-rig-config.git
-git push -u origin main
+# Export a rig (settings, skills, plugins, agents, commands, hooks, MCP config)
+claude-rig export webdev                          # → webdev.tar.gz
+claude-rig export webdev ~/backups/webdev.tar.gz  # explicit path
+claude-rig export webdev --include-auth           # include auth credentials
+claude-rig export webdev --include-data           # include isolated conversations/history
+
+# Import on another machine (or as a new rig)
+claude-rig import webdev.tar.gz webdev-restored
+claude-rig import webdev.tar.gz webdev-restored --link-auth  # link local auth after import
 ```
 
-**What gets tracked:** `CLAUDE.md`, `settings.json`, `mcp.json`, `skills/`, `agents/`, `commands/`, `hooks/` — the stuff you'd actually lose.
+**Default export includes:** settings, CLAUDE.md, skills, plugins, agents, commands, hooks, MCP config, isolation config.
+**Excluded by default:** auth credentials (use `--include-auth`), symlinked shared data (recreated on import), isolated data files (use `--include-data`).
 
-**Restore on a new machine:**
+### Git-Based Backup (Alternative)
 
-```bash
-git clone git@github.com:you/your-rig-config.git ~/.claude-rig
-claude-rig link-auth <rig>        # reconnect auth for each rig
-claude-rig update-plugins         # reinstall marketplace plugins
-```
+For version-controlled backups of `~/.claude-rig/`, see the `.gitignore` patterns in previous releases. The export/import commands are simpler for most use cases.
 
 ## Also Check Out
 

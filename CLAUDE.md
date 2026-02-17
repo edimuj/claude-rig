@@ -45,6 +45,8 @@ No interfaces, no packages, no abstractions. Functions call functions.
 | `isolate`        | `cmdIsolate`       | Mark items as per-rig (remove symlink, create local)           |
 | `share`          | `cmdShare`         | Reverse isolation (delete local, recreate symlink)             |
 | `isolation`      | `cmdIsolation`     | Show isolation status for one or all rigs                      |
+| `export`         | `cmdExport`        | tar.gz of rig-specific files; `--include-auth`, `--include-data` |
+| `import`         | `cmdImport`        | Extract archive into new rig; `--link-auth` optional             |
 | `status`         | `cmdStatus`        | Disk, sessions (/proc), last used; overview or single-rig detail |
 | `update-plugins` | `cmdUpdatePlugins` | Parallel across rigs, calls `claude plugin` CLI                |
 | `doctor`         | `cmdDoctor`        | Checks broken symlinks, missing items                          |

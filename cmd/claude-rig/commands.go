@@ -1,9 +1,12 @@
 package main
 
 import (
+	"archive/tar"
 	"bufio"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -2013,4 +2016,343 @@ func formatBytes(b int64) string {
 	default:
 		return fmt.Sprintf("%dB", b)
 	}
+}
+
+type exportOpts struct {
+	IncludeAuth bool
+	IncludeData bool
+}
+
+func isAuthFile(name string) bool {
+	for _, item := range authItems {
+		if name == item {
+			return true
+		}
+	}
+	return false
+}
+
+func cmdExport(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: claude-rig export <rig> [file] [--include-auth] [--include-data]")
+	}
+
+	var name, destFile string
+	var opts exportOpts
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--include-auth":
+			opts.IncludeAuth = true
+		case "--include-data":
+			opts.IncludeData = true
+		default:
+			if name == "" {
+				name = args[i]
+			} else if destFile == "" {
+				destFile = args[i]
+			}
+		}
+	}
+	if name == "" {
+		return fmt.Errorf("usage: claude-rig export <rig> [file] [--include-auth] [--include-data]")
+	}
+
+	dir, err := rigDir(name)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return fmt.Errorf("rig %q does not exist", name)
+	}
+
+	if destFile == "" {
+		destFile = name + ".tar.gz"
+	}
+
+	cfg := loadRigConfig(dir)
+
+	if err := createTarGz(dir, destFile, opts, cfg); err != nil {
+		return fmt.Errorf("creating archive: %w", err)
+	}
+
+	info, _ := os.Stat(destFile)
+	fmt.Printf("Exported rig %q → %s (%s)\n", name, destFile, formatBytes(info.Size()))
+	return nil
+}
+
+func createTarGz(dir, dest string, opts exportOpts, cfg rigConfig) error {
+	f, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	gw := gzip.NewWriter(f)
+	defer gw.Close()
+
+	tw := tar.NewWriter(gw)
+	defer tw.Close()
+
+	return filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+
+		// Get path relative to rig dir
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+
+		// Top-level name for filtering
+		topLevel := strings.SplitN(rel, string(filepath.Separator), 2)[0]
+
+		// Skip symlinks — shared items are recreated by syncSharedSymlinks on import.
+		// Exception: auth symlinks when --include-auth, so we can export linked auth.
+		linfo, err := os.Lstat(path)
+		if err != nil {
+			return nil
+		}
+		if linfo.Mode()&os.ModeSymlink != 0 {
+			if opts.IncludeAuth && isAuthFile(topLevel) {
+				// Follow the symlink — use the real file info for the tar header
+				info, err = os.Stat(path)
+				if err != nil {
+					return nil
+				}
+				if info.IsDir() {
+					// Auth directory (e.g. statsig/) — walk it manually
+					return addDirToTar(tw, path, topLevel)
+				}
+				// Auth file — fall through to write it
+				linfo = info
+			} else {
+				return nil
+			}
+		}
+
+		// Auth files: skip unless --include-auth
+		if isAuthFile(topLevel) && !opts.IncludeAuth {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		// Isolated data: items in rig.json isolate list that aren't rig-specific
+		if cfg.isIsolated(topLevel) && !isRigSpecific(topLevel) && !opts.IncludeData {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		// Write tar header
+		header, err := tar.FileInfoHeader(linfo, "")
+		if err != nil {
+			return err
+		}
+		header.Name = rel
+
+		if err := tw.WriteHeader(header); err != nil {
+			return err
+		}
+
+		// Write file content
+		if !info.IsDir() {
+			file, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			defer file.Close()
+			if _, err := io.Copy(tw, file); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+}
+
+// addDirToTar walks a symlinked directory and adds its contents to the tar.
+// prefix is the name to use in the archive (e.g. "statsig").
+func addDirToTar(tw *tar.Writer, realPath, prefix string) error {
+	target, err := filepath.EvalSymlinks(realPath)
+	if err != nil {
+		return nil
+	}
+	return filepath.Walk(target, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		rel, err := filepath.Rel(target, path)
+		if err != nil {
+			return nil
+		}
+		archiveName := prefix
+		if rel != "." {
+			archiveName = filepath.Join(prefix, rel)
+		}
+		header, err := tar.FileInfoHeader(info, "")
+		if err != nil {
+			return err
+		}
+		header.Name = archiveName
+		if err := tw.WriteHeader(header); err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			f, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			_, err = io.Copy(tw, f)
+			return err
+		}
+		return nil
+	})
+}
+
+func cmdImport(args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: claude-rig import <file> <name> [--link-auth]")
+	}
+
+	var srcFile, name string
+	var linkAuth bool
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--link-auth":
+			linkAuth = true
+		default:
+			if srcFile == "" {
+				srcFile = args[i]
+			} else if name == "" {
+				name = args[i]
+			}
+		}
+	}
+	if srcFile == "" || name == "" {
+		return fmt.Errorf("usage: claude-rig import <file> <name> [--link-auth]")
+	}
+
+	if err := validateRigName(name); err != nil {
+		return err
+	}
+
+	dir, err := rigDir(name)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(dir); err == nil {
+		return fmt.Errorf("rig %q already exists", name)
+	}
+
+	root, err := rigsRoot()
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(root); os.IsNotExist(err) {
+		return fmt.Errorf("rig system not initialized — run: claude-rig init")
+	}
+
+	if _, err := os.Stat(srcFile); os.IsNotExist(err) {
+		return fmt.Errorf("archive not found: %s", srcFile)
+	}
+
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("creating rig directory: %w", err)
+	}
+
+	count, err := extractTarGz(srcFile, dir)
+	if err != nil {
+		os.RemoveAll(dir)
+		return fmt.Errorf("extracting archive: %w", err)
+	}
+
+	// Seed .claude.json if the archive didn't include one
+	if _, err := os.Stat(filepath.Join(dir, ".claude.json")); os.IsNotExist(err) {
+		if err := seedClaudeJSON(dir); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not seed .claude.json: %v\n", err)
+		}
+	}
+
+	// Create shared symlinks
+	if err := syncSharedSymlinks(dir); err != nil {
+		return fmt.Errorf("creating shared symlinks: %w", err)
+	}
+
+	// Optionally link auth
+	if linkAuth {
+		if err := linkAuthFiles(dir); err != nil {
+			return fmt.Errorf("linking auth files: %w", err)
+		}
+		fmt.Println("Linked auth from existing Claude config")
+	}
+
+	fmt.Printf("Imported %d items into rig %q at %s\n", count, name, dir)
+	fmt.Printf("Launch with: claude-rig launch %s\n", name)
+	return nil
+}
+
+func extractTarGz(src, destDir string) (int, error) {
+	f, err := os.Open(src)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+
+	gr, err := gzip.NewReader(f)
+	if err != nil {
+		return 0, err
+	}
+	defer gr.Close()
+
+	tr := tar.NewReader(gr)
+	count := 0
+
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return count, err
+		}
+
+		// Sanitize: reject paths that escape the dest dir
+		clean := filepath.Clean(header.Name)
+		if strings.HasPrefix(clean, "..") || filepath.IsAbs(clean) {
+			continue
+		}
+
+		target := filepath.Join(destDir, clean)
+
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, os.FileMode(header.Mode)); err != nil {
+				return count, err
+			}
+		case tar.TypeReg:
+			// Ensure parent dir exists
+			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+				return count, err
+			}
+			out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode))
+			if err != nil {
+				return count, err
+			}
+			if _, err := io.Copy(out, tr); err != nil {
+				out.Close()
+				return count, err
+			}
+			out.Close()
+			count++
+		}
+	}
+	return count, nil
 }

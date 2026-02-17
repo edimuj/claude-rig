@@ -81,6 +81,10 @@ func main() {
 		err = cmdIsolation(args)
 	case "status":
 		err = cmdStatus(args)
+	case "export":
+		err = cmdExport(args)
+	case "import":
+		err = cmdImport(args)
 	case "doctor":
 		err = cmdDoctor()
 	case "version", "--version", "-v":
@@ -137,6 +141,8 @@ Commands:
   isolate <rig> <items>   Isolate items per rig (no sharing via symlinks)
   share <rig> <items>     Reverse isolation (delete local, recreate symlink)
   isolation [rig]         Show isolation status for one or all rigs
+  export <rig> [file]     Export rig to .tar.gz (--include-auth, --include-data)
+  import <file> <name>    Import rig from archive (--link-auth)
   status [rig]            Show rig status (disk, sessions, last used)
   update-plugins [rigs]   Update marketplace plugins (all rigs if none given)
   doctor                  Check rigs for broken symlinks and missing items
