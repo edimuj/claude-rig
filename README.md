@@ -34,6 +34,19 @@ claude --rig=webdev
 claude --rig=experiment
 ```
 
+## Why claude-rig
+
+Most tools in this space swap credential files between accounts. claude-rig isolates the entire configuration — and lets you run them simultaneously.
+
+| | claude-rig | Credential switchers |
+|---|---|---|
+| Run multiple configs simultaneously | Yes | No — must close Claude first |
+| Isolated settings, plugins, MCP, hooks | Yes | No — auth only |
+| Choose what's shared vs isolated per rig | Yes | No |
+| Per-project auto-selection | Yes | No |
+| Status, diff, export/import | Yes | No |
+| Dependencies | None (single binary) | Varies |
+
 ## What It Doesn't Do
 
 - **Doesn't modify Claude Code.** Uses the official `CLAUDE_CONFIG_DIR` environment variable and `--add-dir` flag. No patches, no forks.
