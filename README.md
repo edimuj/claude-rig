@@ -135,18 +135,35 @@ alias claude-webdev='claude-rig launch webdev'
 
 ## What's Isolated vs. Shared
 
-| Isolated per rig | Shared across rigs |
+| Always isolated per rig | Shared by default (configurable) |
 |---|---|
-| `settings.json` | `~/.claude/CLAUDE.md` (global memory) |
-| `CLAUDE.md` (rig instructions) | `credentials.json` (auth) |
-| `.claude.json` (MCP servers, state) | `sessions/` (history) |
-| `skills/` | `todos/` |
-| `plugins/` | All other `~/.claude/` files |
-| `agents/` | |
-| `commands/` | |
-| `hooks/` | |
+| `settings.json` | `history.jsonl`, `conversations` |
+| `CLAUDE.md` (rig instructions) | `projects`, `todos`, `tasks` |
+| `.claude.json` (MCP servers, state) | `file-history`, `plans`, `cache` |
+| `skills/`, `plugins/`, `agents/` | `debug`, `session-env`, `telemetry` |
+| `commands/`, `hooks/` | All other `~/.claude/` files |
 
 Each rig gets its own `.claude.json` seeded from the global config on creation. MCP servers configured via `claude mcp add` go directly into the rig's `.claude.json` — no symlinks, no project-level files. Plugins installed within a rig session stay within that rig.
+
+### Configurable Isolation
+
+By default, items like history, conversations, and projects are shared across rigs via symlinks. You can isolate any of them per rig:
+
+```bash
+# Give a rig its own private history and conversations
+claude-rig isolate myrig history.jsonl conversations projects
+
+# See what's isolated vs shared
+claude-rig isolation myrig
+
+# Change your mind — share them again
+claude-rig share myrig history.jsonl
+
+# Or isolate at creation time
+claude-rig create cleanroom --isolate history.jsonl,conversations,projects
+```
+
+Isolation config lives in `rig.json` inside the rig directory. When an item is isolated, the symlink is replaced with a local empty file or directory — the rig gets its own independent copy from that point on.
 
 ## Commands
 
@@ -165,6 +182,9 @@ Each rig gets its own `.claude.json` seeded from the global config on creation. 
 | `unlink-auth <name>` | Remove shared auth so the rig gets its own |
 | `set-args [name] <args>` | Set default launch args (global or per-rig) |
 | `show-args [name]` | Show default launch args |
+| `isolate <rig> <items>` | Isolate items per rig (no sharing via symlinks) |
+| `share <rig> <items>` | Reverse isolation (delete local, recreate symlink) |
+| `isolation [rig]` | Show isolation status for one or all rigs |
 | `update-plugins [rigs]` | Update marketplace plugins across rigs (all if none specified) |
 | `doctor` | Diagnose broken symlinks and missing items |
 
@@ -177,9 +197,11 @@ Each rig is a full config directory under `~/.claude-rig/rigs/<name>/`:
     .claude.json            ← Real file (MCP servers, onboarding state)
     CLAUDE.md               ← Real file (rig-specific instructions)
     settings.json           ← Real file (rig-specific config)
+    rig.json                ← Real file (isolation config, optional)
     skills/                 ← Real directory
     plugins/                ← Real directory
-    sessions/ → ~/.claude/  ← Symlink (shared history)
+    history.jsonl           ← Real file (if isolated) or symlink (if shared)
+    conversations/          ← Real dir (if isolated) or symlink (if shared)
     todos/ → ~/.claude/     ← Symlink (shared)
     ...
 ```

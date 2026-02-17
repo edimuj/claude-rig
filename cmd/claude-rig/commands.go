@@ -12,6 +12,233 @@ import (
 	"syscall"
 )
 
+// rigConfig holds per-rig configuration stored in rig.json.
+type rigConfig struct {
+	Isolate []string `json:"isolate,omitempty"`
+}
+
+func loadRigConfig(rigDir string) rigConfig {
+	data, err := os.ReadFile(rigConfigPath(rigDir))
+	if err != nil {
+		return rigConfig{}
+	}
+	var cfg rigConfig
+	json.Unmarshal(data, &cfg)
+	return cfg
+}
+
+func saveRigConfig(rigDir string, cfg rigConfig) error {
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(rigConfigPath(rigDir), append(data, '\n'), 0644)
+}
+
+func (c rigConfig) isIsolated(name string) bool {
+	for _, item := range c.Isolate {
+		if item == name {
+			return true
+		}
+	}
+	return false
+}
+
+// cmdIsolate marks items as isolated for a rig.
+func cmdIsolate(args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: claude-rig isolate <rig> <items...>\nIsolatable: %s", strings.Join(isolatableItems, ", "))
+	}
+
+	name := args[0]
+	dir, err := rigDir(name)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return fmt.Errorf("rig %q does not exist", name)
+	}
+
+	home, err := claudeHome()
+	if err != nil {
+		return err
+	}
+
+	cfg := loadRigConfig(dir)
+	items := args[1:]
+
+	for _, item := range items {
+		if !isIsolatable(item) {
+			return fmt.Errorf("%q is not isolatable. Valid items: %s", item, strings.Join(isolatableItems, ", "))
+		}
+		if cfg.isIsolated(item) {
+			fmt.Printf("  %s — already isolated\n", item)
+			continue
+		}
+
+		linkPath := filepath.Join(dir, item)
+
+		// Remove existing symlink if present
+		if info, err := os.Lstat(linkPath); err == nil {
+			if info.Mode()&os.ModeSymlink != 0 {
+				os.Remove(linkPath)
+			} else {
+				fmt.Printf("  %s — already a local file/dir, marking isolated\n", item)
+				cfg.Isolate = append(cfg.Isolate, item)
+				continue
+			}
+		}
+
+		// Create empty local file or directory based on what it is in ~/.claude/
+		srcPath := filepath.Join(home, item)
+		srcInfo, err := os.Stat(srcPath)
+		if err == nil && srcInfo.IsDir() {
+			os.MkdirAll(linkPath, 0755)
+		} else if strings.HasSuffix(item, ".json") || strings.HasSuffix(item, ".jsonl") {
+			os.WriteFile(linkPath, []byte(""), 0644)
+		} else {
+			// Assume directory for anything without a file extension
+			if strings.Contains(item, ".") {
+				os.WriteFile(linkPath, []byte(""), 0644)
+			} else {
+				os.MkdirAll(linkPath, 0755)
+			}
+		}
+
+		cfg.Isolate = append(cfg.Isolate, item)
+		fmt.Printf("  %s — isolated\n", item)
+	}
+
+	if err := saveRigConfig(dir, cfg); err != nil {
+		return fmt.Errorf("saving rig config: %w", err)
+	}
+
+	fmt.Printf("Rig %q: %d item(s) isolated\n", name, len(cfg.Isolate))
+	return nil
+}
+
+// cmdShare reverses isolation — deletes local copy and recreates symlink.
+func cmdShare(args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: claude-rig share <rig> <items...>")
+	}
+
+	name := args[0]
+	dir, err := rigDir(name)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return fmt.Errorf("rig %q does not exist", name)
+	}
+
+	home, err := claudeHome()
+	if err != nil {
+		return err
+	}
+
+	cfg := loadRigConfig(dir)
+	items := args[1:]
+
+	for _, item := range items {
+		if !isIsolatable(item) {
+			return fmt.Errorf("%q is not isolatable. Valid items: %s", item, strings.Join(isolatableItems, ", "))
+		}
+		if !cfg.isIsolated(item) {
+			fmt.Printf("  %s — already shared\n", item)
+			continue
+		}
+
+		target := filepath.Join(home, item)
+		if _, err := os.Stat(target); os.IsNotExist(err) {
+			fmt.Printf("  %s — skipped (does not exist in ~/.claude/)\n", item)
+			continue
+		}
+
+		linkPath := filepath.Join(dir, item)
+
+		// Remove local copy
+		os.RemoveAll(linkPath)
+
+		// Recreate symlink
+		if err := os.Symlink(target, linkPath); err != nil {
+			return fmt.Errorf("symlinking %s: %w", item, err)
+		}
+
+		// Remove from isolate list
+		for i, v := range cfg.Isolate {
+			if v == item {
+				cfg.Isolate = append(cfg.Isolate[:i], cfg.Isolate[i+1:]...)
+				break
+			}
+		}
+
+		fmt.Printf("  %s — shared\n", item)
+	}
+
+	if err := saveRigConfig(dir, cfg); err != nil {
+		return fmt.Errorf("saving rig config: %w", err)
+	}
+
+	fmt.Printf("Rig %q: %d item(s) isolated\n", name, len(cfg.Isolate))
+	return nil
+}
+
+// cmdIsolation shows isolation status for one or all rigs.
+func cmdIsolation(args []string) error {
+	root, err := rigsRoot()
+	if err != nil {
+		return err
+	}
+
+	// Single rig
+	if len(args) > 0 {
+		name := args[0]
+		dir, err := rigDir(name)
+		if err != nil {
+			return err
+		}
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			return fmt.Errorf("rig %q does not exist", name)
+		}
+
+		cfg := loadRigConfig(dir)
+		printIsolationStatus(name, cfg)
+		return nil
+	}
+
+	// All rigs
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Println("No rigs found.")
+			return nil
+		}
+		return err
+	}
+
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dir, _ := rigDir(e.Name())
+		cfg := loadRigConfig(dir)
+		printIsolationStatus(e.Name(), cfg)
+	}
+	return nil
+}
+
+func printIsolationStatus(name string, cfg rigConfig) {
+	fmt.Printf("%s:\n", name)
+	for _, item := range isolatableItems {
+		status := "shared"
+		if cfg.isIsolated(item) {
+			status = "isolated"
+		}
+		fmt.Printf("  %-20s %s\n", item, status)
+	}
+}
+
 // cmdSetArgs sets default launch arguments globally or per-rig.
 func cmdSetArgs(args []string) error {
 	if len(args) < 1 {
@@ -378,20 +605,30 @@ func parseClaudeAlias(line string) string {
 // and symlinks to shared items in ~/.claude/.
 func cmdCreate(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: claude-rig create <name> [--link-auth]")
+		return fmt.Errorf("usage: claude-rig create <name> [--link-auth] [--isolate <items,...>]")
 	}
 
 	var name string
 	var linkAuth bool
-	for _, a := range args {
-		if a == "--link-auth" {
+	var isolateItems []string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--link-auth":
 			linkAuth = true
-		} else if name == "" {
-			name = a
+		case "--isolate":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--isolate requires a comma-separated list of items")
+			}
+			i++
+			isolateItems = strings.Split(args[i], ",")
+		default:
+			if name == "" {
+				name = args[i]
+			}
 		}
 	}
 	if name == "" {
-		return fmt.Errorf("usage: claude-rig create <name> [--link-auth]")
+		return fmt.Errorf("usage: claude-rig create <name> [--link-auth] [--isolate <items,...>]")
 	}
 
 	if err := validateRigName(name); err != nil {
@@ -441,6 +678,35 @@ func cmdCreate(args []string) error {
 	// Seed .claude.json with minimal fields from global config
 	if err := seedClaudeJSON(dir); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: could not seed .claude.json: %v\n", err)
+	}
+
+	// Write isolation config before syncing symlinks
+	if len(isolateItems) > 0 {
+		for _, item := range isolateItems {
+			if !isIsolatable(item) {
+				return fmt.Errorf("%q is not isolatable. Valid items: %s", item, strings.Join(isolatableItems, ", "))
+			}
+		}
+		cfg := rigConfig{Isolate: isolateItems}
+		if err := saveRigConfig(dir, cfg); err != nil {
+			return fmt.Errorf("saving rig config: %w", err)
+		}
+
+		// Create local files/dirs for isolated items
+		home, _ := claudeHome()
+		for _, item := range isolateItems {
+			localPath := filepath.Join(dir, item)
+			srcPath := filepath.Join(home, item)
+			srcInfo, srcErr := os.Stat(srcPath)
+			if srcErr == nil && srcInfo.IsDir() {
+				os.MkdirAll(localPath, 0755)
+			} else if strings.Contains(item, ".") {
+				os.WriteFile(localPath, []byte(""), 0644)
+			} else {
+				os.MkdirAll(localPath, 0755)
+			}
+		}
+		fmt.Printf("Isolated: %s\n", strings.Join(isolateItems, ", "))
 	}
 
 	// Symlink shared items from ~/.claude/
@@ -831,9 +1097,14 @@ func cmdList() error {
 		skills := countDirEntries(filepath.Join(dir, "skills"))
 		plugins := countDirEntries(filepath.Join(dir, "plugins"))
 		mcp := countMCPServers(filepath.Join(dir, ".claude.json"))
+		isolated := len(loadRigConfig(dir).Isolate)
 
-		fmt.Printf("%s%-20s auth: %-20s skills: %d  plugins: %d  mcp: %d\n",
-			marker, name, auth, skills, plugins, mcp)
+		info := fmt.Sprintf("auth: %-20s skills: %d  plugins: %d  mcp: %d",
+			auth, skills, plugins, mcp)
+		if isolated > 0 {
+			info += fmt.Sprintf("  isolated: %d", isolated)
+		}
+		fmt.Printf("%s%-20s %s\n", marker, name, info)
 	}
 
 	if !found {
@@ -1402,11 +1673,13 @@ func syncSharedSymlinks(rigDir string) error {
 		return err
 	}
 
+	cfg := loadRigConfig(rigDir)
+
 	for _, e := range entries {
 		name := e.Name()
 
-		// Skip rig-specific items and hidden files
-		if isRigSpecific(name) || strings.HasPrefix(name, ".") {
+		// Skip rig-specific items, hidden files, and isolated items
+		if isRigSpecific(name) || strings.HasPrefix(name, ".") || cfg.isIsolated(name) {
 			continue
 		}
 

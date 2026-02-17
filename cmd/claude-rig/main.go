@@ -73,6 +73,12 @@ func main() {
 		err = cmdRC(args)
 	case "update-plugins":
 		err = cmdUpdatePlugins(args)
+	case "isolate":
+		err = cmdIsolate(args)
+	case "share":
+		err = cmdShare(args)
+	case "isolation":
+		err = cmdIsolation(args)
 	case "doctor":
 		err = cmdDoctor()
 	case "version", "--version", "-v":
@@ -126,6 +132,9 @@ Commands:
   rc [name]               Show or set .claude-rig file for current directory
   set-args [name] <args>  Set default launch args (global if no name, per-rig if given)
   show-args [name]        Show default launch args
+  isolate <rig> <items>   Isolate items per rig (no sharing via symlinks)
+  share <rig> <items>     Reverse isolation (delete local, recreate symlink)
+  isolation [rig]         Show isolation status for one or all rigs
   update-plugins [rigs]   Update marketplace plugins (all rigs if none given)
   doctor                  Check rigs for broken symlinks and missing items
   init                    Initialize rig system (run once)

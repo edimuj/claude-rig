@@ -81,6 +81,29 @@ func activeRigFile() (string, error) {
 	return filepath.Join(rig, ".active"), nil
 }
 
+// isolatableItems are shared items that can optionally be isolated per rig.
+// Everything else in ~/.claude/ that isn't rig-specific or hidden gets symlinked.
+var isolatableItems = []string{
+	"history.jsonl",
+	"conversations",
+	"projects",
+	"todos",
+	"tasks",
+	"file-history",
+	"plans",
+	"debug",
+	"session-env",
+	"shell-snapshots",
+	"cache",
+	"stats-cache.json",
+	"usage-data",
+	"telemetry",
+	"statusline",
+	"chrome",
+	"downloads",
+	"paste-cache",
+}
+
 func isRigSpecific(name string) bool {
 	for _, item := range rigSpecificItems {
 		if name == item {
@@ -88,6 +111,19 @@ func isRigSpecific(name string) bool {
 		}
 	}
 	return false
+}
+
+func isIsolatable(name string) bool {
+	for _, item := range isolatableItems {
+		if name == item {
+			return true
+		}
+	}
+	return false
+}
+
+func rigConfigPath(rigDir string) string {
+	return filepath.Join(rigDir, "rig.json")
 }
 
 func claudeCodeBinary() string {
