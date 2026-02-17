@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -391,17 +392,6 @@ func cmdDoctor() error {
 		return nil
 	}
 	ok("Rig home: %s", rig)
-
-	// Check active rig
-	active := getActiveRig()
-	if active != "" {
-		dir, _ := rigDir(active)
-		if _, err := os.Stat(dir); os.IsNotExist(err) {
-			warn("Active rig %q does not exist", active)
-		} else {
-			ok("Active rig: %s", active)
-		}
-	}
 
 	// Check each rig
 	root, _ := rigsRoot()
@@ -1071,8 +1061,6 @@ func cmdList() error {
 		return err
 	}
 
-	active := getActiveRig()
-
 	// First pass: collect names to resolve auth targets to rig names
 	rigDirs := map[string]string{} // dir path → rig name
 	for _, e := range entries {
@@ -1092,8 +1080,9 @@ func cmdList() error {
 		name := e.Name()
 		dir, _ := rigDir(name)
 
+		sessions := rigRunningSessions(dir)
 		marker := "  "
-		if name == active {
+		if len(sessions) > 0 {
 			marker = "* "
 		}
 
@@ -1165,45 +1154,6 @@ func countMCPServers(path string) int {
 	return len(cfg.MCPServers)
 }
 
-// cmdUse sets the active rig (for shell alias workflows).
-func cmdUse(args []string) error {
-	if len(args) < 1 {
-		return fmt.Errorf("usage: claude-rig use <name>")
-	}
-	name := args[0]
-
-	dir, err := rigDir(name)
-	if err != nil {
-		return err
-	}
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return fmt.Errorf("rig %q does not exist", name)
-	}
-
-	file, err := activeRigFile()
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(file, []byte(name), 0644); err != nil {
-		return fmt.Errorf("writing active rig: %w", err)
-	}
-
-	fmt.Printf("Active rig: %s\n", name)
-	fmt.Printf("Launch with: CLAUDE_CONFIG_DIR=%s claude\n", dir)
-	return nil
-}
-
-// cmdCurrent shows the active rig.
-func cmdCurrent() error {
-	active := getActiveRig()
-	if active == "" {
-		fmt.Println("No active rig set. Use: claude-rig use <name>")
-	} else {
-		fmt.Println(active)
-	}
-	return nil
-}
-
 // cmdDelete removes a rig directory.
 func cmdDelete(args []string) error {
 	if len(args) < 1 {
@@ -1230,12 +1180,6 @@ func cmdDelete(args []string) error {
 	// Only remove real files, not symlink targets
 	if err := os.RemoveAll(dir); err != nil {
 		return fmt.Errorf("removing rig: %w", err)
-	}
-
-	// Clear active if this was it
-	if getActiveRig() == name {
-		file, _ := activeRigFile()
-		os.Remove(file)
 	}
 
 	fmt.Printf("Deleted rig %q\n", name)
@@ -1281,10 +1225,6 @@ func cmdLaunch(args []string) error {
 	if err := syncSharedSymlinks(dir); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: could not sync shared symlinks: %v\n", err)
 	}
-
-	// Set active rig marker
-	file, _ := activeRigFile()
-	os.WriteFile(file, []byte(name), 0644)
 
 	binary := claudeCodeBinary()
 	binPath, err := exec.LookPath(binary)
@@ -1702,17 +1642,6 @@ func syncSharedSymlinks(rigDir string) error {
 	return nil
 }
 
-func getActiveRig() string {
-	file, err := activeRigFile()
-	if err != nil {
-		return ""
-	}
-	data, err := os.ReadFile(file)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(data))
-}
 
 func validateRigName(name string) error {
 	if name == "" {
@@ -1763,8 +1692,6 @@ func cmdStatus(args []string) error {
 		return err
 	}
 
-	active := getActiveRig()
-
 	// Build rigDirs map for auth resolution
 	rigDirs := map[string]string{}
 	for _, e := range entries {
@@ -1785,7 +1712,7 @@ func cmdStatus(args []string) error {
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
 			return fmt.Errorf("rig %q does not exist", name)
 		}
-		return printStatusDetail(name, dir, active, rigDirs)
+		return printStatusDetail(name, dir, rigDirs)
 	}
 
 	// Overview table of all rigs
@@ -1798,8 +1725,9 @@ func cmdStatus(args []string) error {
 		name := e.Name()
 		dir, _ := rigDir(name)
 
+		sessions := rigRunningSessions(dir)
 		marker := "  "
-		if name == active {
+		if len(sessions) > 0 {
 			marker = "* "
 		}
 
@@ -1808,12 +1736,11 @@ func cmdStatus(args []string) error {
 		mcp := countMCPServers(filepath.Join(dir, ".claude.json"))
 		isolated := len(loadRigConfig(dir).Isolate)
 		disk := formatBytes(rigDiskUsage(dir))
-		sessions := rigRunningSessions(dir)
 		lastUsed := rigLastUsed(dir)
 
 		sessionStr := ""
 		if len(sessions) > 0 {
-			sessionStr = "  active"
+			sessionStr = fmt.Sprintf("  running:%d", len(sessions))
 		}
 
 		lastStr := ""
@@ -1831,7 +1758,7 @@ func cmdStatus(args []string) error {
 	return nil
 }
 
-func printStatusDetail(name, dir, active string, rigDirs map[string]string) error {
+func printStatusDetail(name, dir string, rigDirs map[string]string) error {
 	auth := rigAuthStatus(dir, rigDirs)
 	skills := countDirEntries(filepath.Join(dir, "skills"))
 	plugins := countDirEntries(filepath.Join(dir, "plugins"))
@@ -1875,10 +1802,6 @@ func printStatusDetail(name, dir, active string, rigDirs map[string]string) erro
 		fmt.Printf("  Last used:  %s\n", formatTimeAgo(lastUsed))
 	} else {
 		fmt.Printf("  Last used:  never\n")
-	}
-
-	if name == active {
-		fmt.Printf("  Active:     yes\n")
 	}
 
 	fmt.Printf("  Path:       %s\n", dir)
@@ -2355,4 +2278,208 @@ func extractTarGz(src, destDir string) (int, error) {
 		}
 	}
 	return count, nil
+}
+
+func cmdDiff(args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: claude-rig diff <rig1> <rig2>")
+	}
+	name1, name2 := args[0], args[1]
+
+	dir1, err := rigDir(name1)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(dir1); err != nil {
+		return fmt.Errorf("rig %q does not exist", name1)
+	}
+	dir2, err := rigDir(name2)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(dir2); err != nil {
+		return fmt.Errorf("rig %q does not exist", name2)
+	}
+
+	// Build rigDirs map for auth status resolution
+	root, _ := rigsRoot()
+	rigDirs := map[string]string{}
+	if entries, err := os.ReadDir(root); err == nil {
+		for _, e := range entries {
+			if e.IsDir() {
+				rigDirs[filepath.Join(root, e.Name())] = e.Name()
+			}
+		}
+	}
+
+	// Auth
+	auth1 := rigAuthStatus(dir1, rigDirs)
+	auth2 := rigAuthStatus(dir2, rigDirs)
+	if auth1 == auth2 {
+		fmt.Printf("  Auth:       same (%s)\n", auth1)
+	} else {
+		fmt.Printf("  Auth:       %s vs %s\n", auth1, auth2)
+	}
+
+	// Settings
+	s1 := filepath.Join(dir1, "settings.json")
+	s2 := filepath.Join(dir2, "settings.json")
+	diffKeys := settingsKeyDiff(s1, s2)
+	if len(diffKeys) == 0 {
+		fmt.Println("  Settings:   same")
+	} else {
+		fmt.Printf("  Settings:   %d differences (%s)\n", len(diffKeys), strings.Join(diffKeys, ", "))
+	}
+
+	// Dir-based categories
+	type dirCat struct {
+		label string
+		sub   string
+	}
+	dirCats := []dirCat{
+		{"Plugins", "plugins"},
+		{"Skills", "skills"},
+		{"Agents", "agents"},
+		{"Commands", "commands"},
+		{"Hooks", "hooks"},
+	}
+	for _, cat := range dirCats {
+		e1 := dirEntryNames(filepath.Join(dir1, cat.sub))
+		e2 := dirEntryNames(filepath.Join(dir2, cat.sub))
+		printSetDiff(cat.label, name1, name2, e1, e2)
+	}
+
+	// MCP servers
+	mcp1 := mcpServerNames(filepath.Join(dir1, ".claude.json"))
+	mcp2 := mcpServerNames(filepath.Join(dir2, ".claude.json"))
+	printSetDiff("MCP", name1, name2, mcp1, mcp2)
+
+	// Isolation
+	cfg1 := loadRigConfig(dir1)
+	cfg2 := loadRigConfig(dir2)
+	iso1 := cfg1.Isolate
+	iso2 := cfg2.Isolate
+	if len(iso1) == 0 && len(iso2) == 0 {
+		fmt.Println("  Isolation:  same (none)")
+	} else {
+		s1 := "none"
+		s2 := "none"
+		if len(iso1) > 0 {
+			s1 = strings.Join(iso1, ", ")
+		}
+		if len(iso2) > 0 {
+			s2 = strings.Join(iso2, ", ")
+		}
+		if s1 == s2 {
+			fmt.Printf("  Isolation:  same (%s)\n", s1)
+		} else {
+			fmt.Printf("  Isolation:  %s=%s, %s=%s\n", name1, s1, name2, s2)
+		}
+	}
+
+	return nil
+}
+
+func printSetDiff(label, name1, name2 string, a, b []string) {
+	onlyA, onlyB := setDiff(a, b)
+	pad := strings.Repeat(" ", 10-len(label))
+	if len(onlyA) == 0 && len(onlyB) == 0 {
+		fmt.Printf("  %s:%s same (%d)\n", label, pad, len(a))
+		return
+	}
+	parts := []string{fmt.Sprintf("%s has %d, %s has %d", name1, len(a), name2, len(b))}
+	if len(onlyA) > 0 {
+		parts = append(parts, fmt.Sprintf("only %s: %s", name1, strings.Join(onlyA, ", ")))
+	}
+	if len(onlyB) > 0 {
+		parts = append(parts, fmt.Sprintf("only %s: %s", name2, strings.Join(onlyB, ", ")))
+	}
+	fmt.Printf("  %s:%s %s\n", label, pad, strings.Join(parts, " | "))
+}
+
+func dirEntryNames(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names
+}
+
+func mcpServerNames(path string) []string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var cfg struct {
+		MCPServers map[string]json.RawMessage `json:"mcpServers"`
+	}
+	if json.Unmarshal(data, &cfg) != nil {
+		return nil
+	}
+	names := make([]string, 0, len(cfg.MCPServers))
+	for k := range cfg.MCPServers {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func settingsKeyDiff(path1, path2 string) []string {
+	read := func(p string) map[string]json.RawMessage {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return nil
+		}
+		var m map[string]json.RawMessage
+		json.Unmarshal(data, &m)
+		return m
+	}
+	m1, m2 := read(path1), read(path2)
+	if m1 == nil && m2 == nil {
+		return nil
+	}
+	// Collect all keys
+	keys := map[string]bool{}
+	for k := range m1 {
+		keys[k] = true
+	}
+	for k := range m2 {
+		keys[k] = true
+	}
+	var diff []string
+	for k := range keys {
+		v1, ok1 := m1[k]
+		v2, ok2 := m2[k]
+		if !ok1 || !ok2 || string(v1) != string(v2) {
+			diff = append(diff, k)
+		}
+	}
+	sort.Strings(diff)
+	return diff
+}
+
+func setDiff(a, b []string) (onlyA, onlyB []string) {
+	setA := map[string]bool{}
+	setB := map[string]bool{}
+	for _, s := range a {
+		setA[s] = true
+	}
+	for _, s := range b {
+		setB[s] = true
+	}
+	for _, s := range a {
+		if !setB[s] {
+			onlyA = append(onlyA, s)
+		}
+	}
+	for _, s := range b {
+		if !setA[s] {
+			onlyB = append(onlyB, s)
+		}
+	}
+	return
 }

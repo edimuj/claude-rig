@@ -76,6 +76,18 @@ claude-rig rc webdev
 claude-rig                # picks up the rig automatically
 ```
 
+### Using Rigs as Templates
+
+Clone an existing rig to use it as a starting point, then customize:
+
+```bash
+# Clone your go rig into a new one
+claude-rig clone go rust --link-auth
+
+# Create a fully isolated rig — its own history, conversations, projects
+claude-rig create cleanroom --link-auth --isolate history.jsonl,conversations,projects
+```
+
 ## Rig-Specific Instructions
 
 Each rig has its own `CLAUDE.md` for rig-specific instructions. Your global `~/.claude/CLAUDE.md` is always loaded alongside it — you don't lose your personal instructions when using a rig.
@@ -173,10 +185,8 @@ Isolation config lives in `rig.json` inside the rig directory. When an item is i
 | `create <name>` | Create a new rig (`--link-auth` to reuse existing auth) |
 | `clone <src\|default> <dest>` | Clone a rig or `~/.claude/` config (`--link-auth` to share auth) |
 | `delete <name>` | Delete a rig |
-| `list` | List all rigs with auth status and item counts |
+| `list` | List all rigs (`*` = running sessions) |
 | `launch [name] [args]` | Launch Claude Code with a rig (flags forwarded to claude) |
-| `use <name>` | Set the active rig |
-| `current` | Show the active rig |
 | `rc [name]` | Show or create `.claude-rig` file for current directory |
 | `link-auth <name>` | Link rig to shared auth (`--from <rig>` for cross-rig) |
 | `unlink-auth <name>` | Remove shared auth so the rig gets its own |
@@ -185,6 +195,7 @@ Isolation config lives in `rig.json` inside the rig directory. When an item is i
 | `isolate <rig> <items>` | Isolate items per rig (no sharing via symlinks) |
 | `share <rig> <items>` | Reverse isolation (delete local, recreate symlink) |
 | `isolation [rig]` | Show isolation status for one or all rigs |
+| `diff <rig1> <rig2>` | Compare two rigs (auth, settings, plugins, MCP, isolation, etc.) |
 | `export <rig> [file]` | Export rig to `.tar.gz` (`--include-auth`, `--include-data`) |
 | `import <file> <name>` | Import rig from archive (`--link-auth` to link auth after import) |
 | `status [rig]` | Show rig status: disk usage, running sessions, last used |
@@ -246,6 +257,50 @@ claude-rig import webdev.tar.gz webdev-restored --link-auth  # link local auth a
 ### Git-Based Backup (Alternative)
 
 For version-controlled backups of `~/.claude-rig/`, see the `.gitignore` patterns in previous releases. The export/import commands are simpler for most use cases.
+
+## Rig Status
+
+See what's going on across all your rigs at a glance:
+
+```bash
+$ claude-rig status
+* go                 auth: linked  plugins: 5  mcp: 1  isolated: 0  disk: 44K   running:7  last: just now
+  minimal            auth: linked  plugins: 5  mcp: 0  isolated: 0  disk: 37K   last: 1d ago
+  webdev             auth: own     plugins: 3  mcp: 2  isolated: 3  disk: 1.2M  running:2  last: 3h ago
+```
+
+Drill into a single rig for details:
+
+```bash
+$ claude-rig status go
+Rig: go
+  Auth:       linked
+  Skills:     1
+  Plugins:    5
+  MCP:        1
+  Isolated:   none
+  Disk:       44K (real: 44K, symlinked: 451B)
+  Sessions:   2 running (PID 12345, 67890)
+  Last used:  just now
+  Path:       /home/user/.claude-rig/rigs/go
+```
+
+## Rig Diff
+
+Compare two rigs to see what's different — settings, plugins, MCP servers, skills, agents, isolation config, and more:
+
+```bash
+$ claude-rig diff go minimal
+  Auth:       same (linked)
+  Settings:   2 differences (enabledPlugins, hooks)
+  Plugins:    same (5)
+  Skills:     go has 1, minimal has 0 | only go: checkpoint
+  Agents:     go has 1, minimal has 0 | only go: go-reviewer.md
+  Commands:   same (0)
+  Hooks:      same (0)
+  MCP:        go has 1, minimal has 0 | only go: gopls
+  Isolation:  same (none)
+```
 
 ## Also Check Out
 

@@ -33,10 +33,8 @@ No interfaces, no packages, no abstractions. Functions call functions.
 | `create`         | `cmdCreate`        | Seeds `.claude.json`, creates rig-specific dirs                |
 | `clone`          | `cmdClone`         | `cloneFromDefault` for `~/.claude/`, `cloneDir` for rig-to-rig |
 | `delete`         | `cmdDelete`        | Refuses to delete active rig                                   |
-| `list`           | `cmdList`          | Auth status, item counts, MCP server counts                    |
+| `list`           | `cmdList`          | `*` for running sessions, auth, skills, plugins, MCP counts    |
 | `launch`         | `cmdLaunch`        | Resolves `.claude-rig` file, sets env, `syscall.Exec`          |
-| `use`            | `cmdUse`           | Writes `.active` file                                          |
-| `current`        | `cmdCurrent`       | Reads `.active` file                                           |
 | `rc`             | `cmdRC`            | Creates/reads `.claude-rig` project file, walks up dirs        |
 | `link-auth`      | `cmdLinkAuth`      | Symlinks auth files, `--from` for cross-rig                    |
 | `unlink-auth`    | `cmdUnlinkAuth`    | Copies auth files back to break sharing                        |
@@ -45,6 +43,7 @@ No interfaces, no packages, no abstractions. Functions call functions.
 | `isolate`        | `cmdIsolate`       | Mark items as per-rig (remove symlink, create local)           |
 | `share`          | `cmdShare`         | Reverse isolation (delete local, recreate symlink)             |
 | `isolation`      | `cmdIsolation`     | Show isolation status for one or all rigs                      |
+| `diff`           | `cmdDiff`          | Compare two rigs: auth, settings, plugins, MCP, etc.             |
 | `export`         | `cmdExport`        | tar.gz of rig-specific files; `--include-auth`, `--include-data` |
 | `import`         | `cmdImport`        | Extract archive into new rig; `--link-auth` optional             |
 | `status`         | `cmdStatus`        | Disk, sessions (/proc), last used; overview or single-rig detail |

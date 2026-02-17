@@ -49,10 +49,6 @@ func main() {
 		err = cmdCreate(args)
 	case "list", "ls":
 		err = cmdList()
-	case "use":
-		err = cmdUse(args)
-	case "current":
-		err = cmdCurrent()
 	case "delete", "rm":
 		err = cmdDelete(args)
 	case "launch":
@@ -81,6 +77,8 @@ func main() {
 		err = cmdIsolation(args)
 	case "status":
 		err = cmdStatus(args)
+	case "diff":
+		err = cmdDiff(args)
 	case "export":
 		err = cmdExport(args)
 	case "import":
@@ -130,9 +128,7 @@ Commands:
   clone <src|default> <dest>  Clone a rig or ~/.claude/ config (--link-auth to share auth)
   link-auth <name>        Link rig to shared auth (--from <rig> for cross-rig)
   unlink-auth <name>      Remove shared auth, rig will use its own
-  list                    List all rigs and show active one
-  use <name>              Set the active rig (for shell alias usage)
-  current                 Show the currently active rig
+  list                    List all rigs (* = running sessions)
   delete <name>           Delete a rig
   launch [name] [args]    Launch Claude Code with a specific rig
   rc [name]               Show or set .claude-rig file for current directory
@@ -141,6 +137,7 @@ Commands:
   isolate <rig> <items>   Isolate items per rig (no sharing via symlinks)
   share <rig> <items>     Reverse isolation (delete local, recreate symlink)
   isolation [rig]         Show isolation status for one or all rigs
+  diff <rig1> <rig2>      Compare two rigs (auth, settings, plugins, MCP, etc.)
   export <rig> [file]     Export rig to .tar.gz (--include-auth, --include-data)
   import <file> <name>    Import rig from archive (--link-auth)
   status [rig]            Show rig status (disk, sessions, last used)
