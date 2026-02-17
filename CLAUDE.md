@@ -7,7 +7,7 @@ Go CLI tool for managing multiple Claude Code configuration rigs.
 Single-binary CLI, `package main` in `cmd/claude-rig/`. Three files:
 
 - `main.go` — entrypoint, command dispatch (`switch` on `os.Args[1]`), usage text
-- `commands.go` — all command implementations + helpers (~1300 lines, the workhorse)
+- `commands.go` — all command implementations + helpers (~2000 lines, the workhorse)
 - `paths.go` — filesystem paths, rig-specific item list, platform detection
 
 No interfaces, no packages, no abstractions. Functions call functions.
@@ -45,6 +45,7 @@ No interfaces, no packages, no abstractions. Functions call functions.
 | `isolate`        | `cmdIsolate`       | Mark items as per-rig (remove symlink, create local)           |
 | `share`          | `cmdShare`         | Reverse isolation (delete local, recreate symlink)             |
 | `isolation`      | `cmdIsolation`     | Show isolation status for one or all rigs                      |
+| `status`         | `cmdStatus`        | Disk, sessions (/proc), last used; overview or single-rig detail |
 | `update-plugins` | `cmdUpdatePlugins` | Parallel across rigs, calls `claude plugin` CLI                |
 | `doctor`         | `cmdDoctor`        | Checks broken symlinks, missing items                          |
 

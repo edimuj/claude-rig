@@ -79,6 +79,8 @@ func main() {
 		err = cmdShare(args)
 	case "isolation":
 		err = cmdIsolation(args)
+	case "status":
+		err = cmdStatus(args)
 	case "doctor":
 		err = cmdDoctor()
 	case "version", "--version", "-v":
@@ -135,6 +137,7 @@ Commands:
   isolate <rig> <items>   Isolate items per rig (no sharing via symlinks)
   share <rig> <items>     Reverse isolation (delete local, recreate symlink)
   isolation [rig]         Show isolation status for one or all rigs
+  status [rig]            Show rig status (disk, sessions, last used)
   update-plugins [rigs]   Update marketplace plugins (all rigs if none given)
   doctor                  Check rigs for broken symlinks and missing items
   init                    Initialize rig system (run once)

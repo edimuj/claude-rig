@@ -185,6 +185,7 @@ Isolation config lives in `rig.json` inside the rig directory. When an item is i
 | `isolate <rig> <items>` | Isolate items per rig (no sharing via symlinks) |
 | `share <rig> <items>` | Reverse isolation (delete local, recreate symlink) |
 | `isolation [rig]` | Show isolation status for one or all rigs |
+| `status [rig]` | Show rig status: disk usage, running sessions, last used |
 | `update-plugins [rigs]` | Update marketplace plugins across rigs (all if none specified) |
 | `doctor` | Diagnose broken symlinks and missing items |
 

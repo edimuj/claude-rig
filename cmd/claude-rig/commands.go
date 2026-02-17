@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 )
 
 // rigConfig holds per-rig configuration stored in rig.json.
@@ -1742,4 +1743,274 @@ func removeEnv(env []string, key string) []string {
 		}
 	}
 	return env
+}
+
+func cmdStatus(args []string) error {
+	root, err := rigsRoot()
+	if err != nil {
+		return err
+	}
+
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Println("No rigs found. Run: claude-rig init")
+			return nil
+		}
+		return err
+	}
+
+	active := getActiveRig()
+
+	// Build rigDirs map for auth resolution
+	rigDirs := map[string]string{}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dir, _ := rigDir(e.Name())
+		rigDirs[dir] = e.Name()
+	}
+
+	// Single rig mode
+	if len(args) > 0 {
+		name := args[0]
+		dir, err := rigDir(name)
+		if err != nil {
+			return err
+		}
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			return fmt.Errorf("rig %q does not exist", name)
+		}
+		return printStatusDetail(name, dir, active, rigDirs)
+	}
+
+	// Overview table of all rigs
+	found := false
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		found = true
+		name := e.Name()
+		dir, _ := rigDir(name)
+
+		marker := "  "
+		if name == active {
+			marker = "* "
+		}
+
+		auth := rigAuthStatus(dir, rigDirs)
+		plugins := countDirEntries(filepath.Join(dir, "plugins"))
+		mcp := countMCPServers(filepath.Join(dir, ".claude.json"))
+		isolated := len(loadRigConfig(dir).Isolate)
+		disk := formatBytes(rigDiskUsage(dir))
+		sessions := rigRunningSessions(dir)
+		lastUsed := rigLastUsed(dir)
+
+		sessionStr := ""
+		if len(sessions) > 0 {
+			sessionStr = "  active"
+		}
+
+		lastStr := ""
+		if !lastUsed.IsZero() {
+			lastStr = "  last: " + formatTimeAgo(lastUsed)
+		}
+
+		fmt.Printf("%s%-18s auth: %-20s plugins: %d  mcp: %d  isolated: %d  disk: %-5s%s%s\n",
+			marker, name, auth, plugins, mcp, isolated, disk, sessionStr, lastStr)
+	}
+
+	if !found {
+		fmt.Println("No rigs found. Run: claude-rig create <name>")
+	}
+	return nil
+}
+
+func printStatusDetail(name, dir, active string, rigDirs map[string]string) error {
+	auth := rigAuthStatus(dir, rigDirs)
+	skills := countDirEntries(filepath.Join(dir, "skills"))
+	plugins := countDirEntries(filepath.Join(dir, "plugins"))
+	mcp := countMCPServers(filepath.Join(dir, ".claude.json"))
+	cfg := loadRigConfig(dir)
+	sessions := rigRunningSessions(dir)
+	lastUsed := rigLastUsed(dir)
+	realSize, symlinkSize := rigDiskUsageDetailed(dir)
+
+	fmt.Printf("Rig: %s\n", name)
+	fmt.Printf("  Auth:       %s\n", auth)
+	fmt.Printf("  Skills:     %d\n", skills)
+	fmt.Printf("  Plugins:    %d\n", plugins)
+	fmt.Printf("  MCP:        %d\n", mcp)
+
+	if len(cfg.Isolate) > 0 {
+		fmt.Printf("  Isolated:   %s\n", strings.Join(cfg.Isolate, ", "))
+	} else {
+		fmt.Printf("  Isolated:   none\n")
+	}
+
+	totalSize := realSize + symlinkSize
+	if symlinkSize > 0 {
+		fmt.Printf("  Disk:       %s (real: %s, symlinked: %s)\n",
+			formatBytes(totalSize), formatBytes(realSize), formatBytes(symlinkSize))
+	} else {
+		fmt.Printf("  Disk:       %s\n", formatBytes(totalSize))
+	}
+
+	if len(sessions) > 0 {
+		pids := make([]string, len(sessions))
+		for i, pid := range sessions {
+			pids[i] = fmt.Sprintf("%d", pid)
+		}
+		fmt.Printf("  Sessions:   %d running (PID %s)\n", len(sessions), strings.Join(pids, ", "))
+	} else {
+		fmt.Printf("  Sessions:   none\n")
+	}
+
+	if !lastUsed.IsZero() {
+		fmt.Printf("  Last used:  %s\n", formatTimeAgo(lastUsed))
+	} else {
+		fmt.Printf("  Last used:  never\n")
+	}
+
+	if name == active {
+		fmt.Printf("  Active:     yes\n")
+	}
+
+	fmt.Printf("  Path:       %s\n", dir)
+	return nil
+}
+
+// rigDiskUsage returns the total size of real (non-symlinked) files in the rig directory.
+func rigDiskUsage(dir string) int64 {
+	size, _ := rigDiskUsageDetailed(dir)
+	return size
+}
+
+// rigDiskUsageDetailed returns (real file size, symlink target size) for the rig directory.
+func rigDiskUsageDetailed(dir string) (int64, int64) {
+	var realSize, symlinkSize int64
+	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		linfo, lerr := os.Lstat(path)
+		if lerr != nil {
+			return nil
+		}
+		if linfo.Mode()&os.ModeSymlink != 0 {
+			// Follow symlink to get target size
+			if tgt, terr := os.Stat(path); terr == nil {
+				if tgt.IsDir() {
+					// Walk the symlinked directory
+					filepath.Walk(path, func(_ string, fi os.FileInfo, e error) error {
+						if e != nil || fi.IsDir() {
+							return nil
+						}
+						symlinkSize += fi.Size()
+						return nil
+					})
+				} else {
+					symlinkSize += tgt.Size()
+				}
+			}
+			return filepath.SkipDir
+		}
+		if !info.IsDir() {
+			realSize += info.Size()
+		}
+		return nil
+	})
+	return realSize, symlinkSize
+}
+
+// rigLastUsed returns the modification time of the rig directory.
+func rigLastUsed(dir string) time.Time {
+	info, err := os.Stat(dir)
+	if err != nil {
+		return time.Time{}
+	}
+	return info.ModTime()
+}
+
+// rigRunningSessions scans /proc for processes with CLAUDE_CONFIG_DIR matching the rig directory.
+// Returns a slice of matching PIDs. Graceful no-op on non-Linux.
+func rigRunningSessions(dir string) []int {
+	procs, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil
+	}
+	needle := []byte("CLAUDE_CONFIG_DIR=" + dir)
+	var pids []int
+	for _, p := range procs {
+		if !p.IsDir() {
+			continue
+		}
+		// Only look at numeric dirs (PIDs)
+		pid := 0
+		for _, c := range p.Name() {
+			if c < '0' || c > '9' {
+				pid = -1
+				break
+			}
+			pid = pid*10 + int(c-'0')
+		}
+		if pid <= 0 {
+			continue
+		}
+		env, err := os.ReadFile(filepath.Join("/proc", p.Name(), "environ"))
+		if err != nil {
+			continue
+		}
+		if bytesContains(env, needle) {
+			pids = append(pids, pid)
+		}
+	}
+	return pids
+}
+
+// bytesContains checks if haystack contains needle (for null-separated /proc environ).
+func bytesContains(haystack, needle []byte) bool {
+	return len(needle) > 0 && len(haystack) >= len(needle) &&
+		strings.Contains(string(haystack), string(needle))
+}
+
+func formatTimeAgo(t time.Time) string {
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		m := int(d.Minutes())
+		if m == 1 {
+			return "1m ago"
+		}
+		return fmt.Sprintf("%dm ago", m)
+	case d < 24*time.Hour:
+		h := int(d.Hours())
+		if h == 1 {
+			return "1h ago"
+		}
+		return fmt.Sprintf("%dh ago", h)
+	default:
+		days := int(d.Hours() / 24)
+		if days == 1 {
+			return "1d ago"
+		}
+		return fmt.Sprintf("%dd ago", days)
+	}
+}
+
+func formatBytes(b int64) string {
+	switch {
+	case b >= 1<<30:
+		return fmt.Sprintf("%.1fG", float64(b)/float64(1<<30))
+	case b >= 1<<20:
+		return fmt.Sprintf("%dM", b/(1<<20))
+	case b >= 1<<10:
+		return fmt.Sprintf("%dK", b/(1<<10))
+	default:
+		return fmt.Sprintf("%dB", b)
+	}
 }
