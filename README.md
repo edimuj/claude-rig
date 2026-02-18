@@ -227,6 +227,7 @@ Rig-specific files always win — if both `~/.claude/skills/foo/` and the rig ha
 | `create <name>` | Create a new rig (`--link-auth` to reuse existing auth) |
 | `clone <src\|default> <dest>` | Clone a rig or `~/.claude/` config (`--link-auth` to share auth) |
 | `delete <name>` | Delete a rig |
+| `rename <old> <new>` | Rename a rig |
 | `list` | List all rigs (`*` = running sessions) |
 | `launch [name] [args]` | Launch Claude Code with a rig (flags forwarded to claude) |
 | `rc [name]` | Show or create `.claude-rig` file for current directory |
@@ -244,6 +245,8 @@ Rig-specific files always win — if both `~/.claude/skills/foo/` and the rig ha
 | `import <file> <name>` | Import rig from archive (`--link-auth` to link auth after import) |
 | `status [rig]` | Show rig status: disk usage, running sessions, last used |
 | `update-plugins [rigs]` | Update marketplace plugins across rigs (all if none specified) |
+| `sync [rig]` | Refresh symlinks and inherited contents (all rigs if none given) |
+| `update` | Update Claude Code (forwards to `claude update`) |
 | `doctor` | Diagnose broken symlinks and missing items |
 
 ## How It Works

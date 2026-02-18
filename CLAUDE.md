@@ -35,6 +35,9 @@ No interfaces, no packages, no abstractions. Functions call functions.
 | `create`         | `cmdCreate`        | Seeds `.claude.json`, creates rig-specific dirs                |
 | `clone`          | `cmdClone`         | `cloneFromDefault` for `~/.claude/`, `cloneDir` for rig-to-rig |
 | `delete`         | `cmdDelete`        | Refuses to delete active rig                                   |
+| `rename`         | `cmdRename`        | Renames rig dir, warns about .claude-rig files                 |
+| `sync`           | `cmdSync`          | Refresh symlinks + inherited contents for one or all rigs      |
+| `update`         | `cmdUpdate`        | Forwards to `claude update`                                    |
 | `list`           | `cmdList`          | `*` for running sessions, auth, skills, plugins, MCP counts    |
 | `launch`         | `cmdLaunch`        | Resolves `.claude-rig` file, sets env, `syscall.Exec`          |
 | `rc`             | `cmdRC`            | Creates/reads `.claude-rig` project file, walks up dirs        |

@@ -1411,6 +1411,108 @@ func cmdDelete(args []string) error {
 	return nil
 }
 
+// cmdRename renames a rig directory.
+func cmdRename(args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: claude-rig rename <old> <new>")
+	}
+	oldName, newName := args[0], args[1]
+
+	if err := validateRigName(newName); err != nil {
+		return err
+	}
+
+	oldDir, err := rigDir(oldName)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(oldDir); os.IsNotExist(err) {
+		return fmt.Errorf("rig %q does not exist", oldName)
+	}
+
+	newDir, err := rigDir(newName)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(newDir); err == nil {
+		return fmt.Errorf("rig %q already exists", newName)
+	}
+
+	if err := os.Rename(oldDir, newDir); err != nil {
+		return fmt.Errorf("renaming rig: %w", err)
+	}
+
+	fmt.Printf("Renamed %q → %q\n", oldName, newName)
+	fmt.Println("Note: update any .claude-rig files that reference the old name")
+	return nil
+}
+
+// cmdSync refreshes shared symlinks and inherited contents for one or all rigs.
+func cmdSync(args []string) error {
+	root, err := rigsRoot()
+	if err != nil {
+		return err
+	}
+
+	var names []string
+	if len(args) > 0 {
+		// Sync specific rig
+		name := args[0]
+		dir, err := rigDir(name)
+		if err != nil {
+			return err
+		}
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			return fmt.Errorf("rig %q does not exist", name)
+		}
+		names = append(names, name)
+	} else {
+		// Sync all rigs
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			if os.IsNotExist(err) {
+				fmt.Println("No rigs found.")
+				return nil
+			}
+			return err
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				names = append(names, e.Name())
+			}
+		}
+	}
+
+	for _, name := range names {
+		dir, _ := rigDir(name)
+		if err := syncSharedSymlinks(dir); err != nil {
+			fmt.Fprintf(os.Stderr, "  %s: symlink sync error: %v\n", name, err)
+			continue
+		}
+		if err := syncGlobalContents(dir); err != nil {
+			fmt.Fprintf(os.Stderr, "  %s: inheritance sync error: %v\n", name, err)
+			continue
+		}
+		fmt.Printf("  %s — synced\n", name)
+	}
+	return nil
+}
+
+// cmdUpdate forwards to `claude update`.
+func cmdUpdate(args []string) error {
+	binary := claudeCodeBinary()
+	binPath, err := exec.LookPath(binary)
+	if err != nil {
+		return fmt.Errorf("claude binary not found: %w (set CLAUDE_BINARY to override)", err)
+	}
+
+	cmd := exec.Command(binPath, append([]string{"update"}, args...)...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+	return cmd.Run()
+}
+
 // cmdLaunch starts Claude Code with the specified rig's config dir.
 func cmdLaunch(args []string) error {
 	var name string

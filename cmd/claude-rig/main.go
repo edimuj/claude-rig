@@ -51,6 +51,12 @@ func main() {
 		err = cmdList()
 	case "delete", "rm":
 		err = cmdDelete(args)
+	case "rename", "mv":
+		err = cmdRename(args)
+	case "sync":
+		err = cmdSync(args)
+	case "update":
+		err = cmdUpdate(args)
 	case "launch":
 		err = cmdLaunch(args)
 	case "clone":
@@ -134,6 +140,9 @@ Commands:
   unlink-auth <name>      Remove shared auth, rig will use its own
   list                    List all rigs (* = running sessions)
   delete <name>           Delete a rig
+  rename <old> <new>      Rename a rig
+  sync [rig]              Refresh symlinks and inherited contents (all rigs if none given)
+  update                  Update Claude Code (forwards to claude update)
   launch [name] [args]    Launch Claude Code with a specific rig
   rc [name]               Show or set .claude-rig file for current directory
   set-args [name] <args>  Set default launch args (global if no name, per-rig if given)
