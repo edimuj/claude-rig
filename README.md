@@ -238,7 +238,7 @@ On `launch`, claude-rig:
 1. Sets `CLAUDE_CONFIG_DIR` to the rig directory
 2. Loads global `~/.claude/CLAUDE.md` via `--add-dir`
 3. Refreshes symlinks to pick up any new shared files
-4. Replaces itself with Claude Code via `exec` (no wrapper process)
+4. Replaces itself with Claude Code via `exec` (Unix) or spawns it as a child process (Windows)
 
 Two Claude Code instances with different rigs run simultaneously without conflicts.
 
@@ -246,7 +246,24 @@ Two Claude Code instances with different rigs run simultaneously without conflic
 
 - **Linux** — Full support
 - **macOS** — Full support
-- **Windows** — Requires Developer Mode (for symlinks)
+- **Windows** — Requires Developer Mode (for symlinks). Session detection (`*` markers in `list`/`status`) is not available on Windows
+
+### Windows
+
+Windows requires **Developer Mode** enabled for symlink support. `claude-rig init` checks this automatically and fails fast with a clear message if symlinks aren't available.
+
+**Shell integration** works with both PowerShell and Git Bash:
+
+- **PowerShell** (5.x and 7+) — Installs a `claude` function wrapper in your PowerShell profile
+- **Git Bash / MSYS2** — Detects `SHELL` env var and installs the same bash wrapper as Linux/macOS
+
+**Launch behavior** differs slightly: on Unix, `claude-rig launch` replaces itself with Claude Code via `exec`. On Windows, it spawns Claude Code as a child process and forwards the exit code.
+
+**Cross-compile from Linux/macOS:**
+
+```bash
+make build-windows    # produces claude-rig.exe (amd64)
+```
 
 ## Export & Import
 
@@ -331,6 +348,7 @@ More open-source tools for the Claude Code workflow:
 
 ```bash
 make build                # build binary
+make build-windows        # cross-compile for Windows (amd64)
 make run ARGS="version"   # run without installing
 make install              # install to ~/go/bin/
 ```
