@@ -75,6 +75,10 @@ func main() {
 		err = cmdShare(args)
 	case "isolation":
 		err = cmdIsolation(args)
+	case "inherit":
+		err = cmdInherit(args)
+	case "uninherit":
+		err = cmdUninherit(args)
 	case "status":
 		err = cmdStatus(args)
 	case "diff":
@@ -137,6 +141,8 @@ Commands:
   isolate <rig> <items>   Isolate items per rig (no sharing via symlinks)
   share <rig> <items>     Reverse isolation (delete local, recreate symlink)
   isolation [rig]         Show isolation status for one or all rigs
+  inherit <items> [rig]   Inherit global skills/agents/hooks/commands from ~/.claude/
+  uninherit <items> [rig] Stop inheriting (remove global symlinks)
   diff <rig1> <rig2>      Compare two rigs (auth, settings, plugins, MCP, etc.)
   export <rig> [file]     Export rig to .tar.gz (--include-auth, --include-data)
   import <file> <name>    Import rig from archive (--link-auth)
@@ -151,6 +157,7 @@ Examples:
   claude-rig init                    # Set up the rig system
   claude-rig create minimal          # Create a new empty rig
   claude-rig create webappdev --link-auth  # Create rig, reuse existing auth
+  claude-rig create myrig --inherit-all   # Create rig, inherit global skills/agents/hooks/commands
   claude-rig launch webappdev        # Launch Claude Code with this rig
   claude-rig list                    # See all rigs
   claude-rig rc minimal              # Bind current directory to a rig

@@ -21,8 +21,10 @@ No interfaces, no packages, no abstractions. Functions call functions.
 - `.claude.json` lives in `~/` not `~/.claude/` — special-cased in auth linking
 - `CLAUDE_CONFIG_DIR` env var points Claude Code at the rig directory
 - `launch` uses `syscall.Exec` (replaces process, not subprocess)
-- `rig.json` in rig dir controls per-rig isolation (`{"isolate": ["history.jsonl", ...]}`)
+- `rig.json` in rig dir controls per-rig isolation (`{"isolate": [...]}`) and inheritance (`{"inherit": ["skills", ...]}`)
 - `syncSharedSymlinks` skips items in rig.json isolate list
+- `syncGlobalContents` symlinks entries from `~/.claude/{skills,agents,hooks,commands}/` into rig for inherited items
+- Inheritance = 3-layer: global (`~/.claude/`) → rig → project (`.claude/`). Rig-local files override inherited symlinks
 - Version injected via ldflags from git tags
 
 ## Command → Function Map
@@ -43,6 +45,8 @@ No interfaces, no packages, no abstractions. Functions call functions.
 | `isolate`        | `cmdIsolate`       | Mark items as per-rig (remove symlink, create local)           |
 | `share`          | `cmdShare`         | Reverse isolation (delete local, recreate symlink)             |
 | `isolation`      | `cmdIsolation`     | Show isolation status for one or all rigs                      |
+| `inherit`        | `cmdInherit`       | Enable global inheritance for skills/agents/hooks/commands     |
+| `uninherit`      | `cmdUninherit`     | Disable inheritance, remove global symlinks                    |
 | `diff`           | `cmdDiff`          | Compare two rigs: auth, settings, plugins, MCP, etc.             |
 | `export`         | `cmdExport`        | tar.gz of rig-specific files; `--include-auth`, `--include-data` |
 | `import`         | `cmdImport`        | Extract archive into new rig; `--link-auth` optional             |

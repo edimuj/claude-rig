@@ -19,6 +19,7 @@ import (
 // rigConfig holds per-rig configuration stored in rig.json.
 type rigConfig struct {
 	Isolate []string `json:"isolate,omitempty"`
+	Inherit []string `json:"inherit,omitempty"`
 }
 
 func loadRigConfig(rigDir string) rigConfig {
@@ -41,6 +42,15 @@ func saveRigConfig(rigDir string, cfg rigConfig) error {
 
 func (c rigConfig) isIsolated(name string) bool {
 	for _, item := range c.Isolate {
+		if item == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (c rigConfig) isInherited(name string) bool {
+	for _, item := range c.Inherit {
 		if item == name {
 			return true
 		}
@@ -240,6 +250,259 @@ func printIsolationStatus(name string, cfg rigConfig) {
 			status = "isolated"
 		}
 		fmt.Printf("  %-20s %s\n", item, status)
+	}
+	if len(cfg.Inherit) > 0 {
+		fmt.Printf("  Inheriting: %s\n", strings.Join(cfg.Inherit, ", "))
+	}
+}
+
+// cmdInherit enables global inheritance for skills/agents/hooks/commands.
+func cmdInherit(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: claude-rig inherit <items...|--all> [rig]\nInheritable: %s", strings.Join(inheritableItems, ", "))
+	}
+
+	var items []string
+	var name string
+	var all bool
+	for _, a := range args {
+		if a == "--all" {
+			all = true
+		} else if isInheritable(a) {
+			items = append(items, a)
+		} else if name == "" {
+			name = a
+		}
+	}
+	if all {
+		items = inheritableItems
+	}
+	if len(items) == 0 {
+		return fmt.Errorf("specify items to inherit or --all.\nInheritable: %s", strings.Join(inheritableItems, ", "))
+	}
+
+	// If no rig name given, try RC file
+	if name == "" {
+		rig, _, err := findRC()
+		if err != nil {
+			return err
+		}
+		if rig == "" {
+			return fmt.Errorf("usage: claude-rig inherit <items...|--all> [rig]")
+		}
+		name = rig
+	}
+
+	dir, err := rigDir(name)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return fmt.Errorf("rig %q does not exist", name)
+	}
+
+	cfg := loadRigConfig(dir)
+
+	for _, item := range items {
+		if cfg.isInherited(item) {
+			fmt.Printf("  %s — already inherited\n", item)
+			continue
+		}
+		cfg.Inherit = append(cfg.Inherit, item)
+		fmt.Printf("  %s — inherited\n", item)
+	}
+
+	if err := saveRigConfig(dir, cfg); err != nil {
+		return fmt.Errorf("saving rig config: %w", err)
+	}
+
+	// Sync immediately so the symlinks are created
+	if err := syncGlobalContents(dir); err != nil {
+		return fmt.Errorf("syncing global contents: %w", err)
+	}
+
+	fmt.Printf("Rig %q: inheriting %s\n", name, strings.Join(cfg.Inherit, ", "))
+	return nil
+}
+
+// cmdUninherit disables global inheritance for skills/agents/hooks/commands.
+func cmdUninherit(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: claude-rig uninherit <items...|--all> [rig]\nInheritable: %s", strings.Join(inheritableItems, ", "))
+	}
+
+	var items []string
+	var name string
+	var all bool
+	for _, a := range args {
+		if a == "--all" {
+			all = true
+		} else if isInheritable(a) {
+			items = append(items, a)
+		} else if name == "" {
+			name = a
+		}
+	}
+	if all {
+		items = inheritableItems
+	}
+	if len(items) == 0 {
+		return fmt.Errorf("specify items to uninherit or --all.\nInheritable: %s", strings.Join(inheritableItems, ", "))
+	}
+
+	// If no rig name given, try RC file
+	if name == "" {
+		rig, _, err := findRC()
+		if err != nil {
+			return err
+		}
+		if rig == "" {
+			return fmt.Errorf("usage: claude-rig uninherit <items...|--all> [rig]")
+		}
+		name = rig
+	}
+
+	dir, err := rigDir(name)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return fmt.Errorf("rig %q does not exist", name)
+	}
+
+	home, err := globalClaudeHome()
+	if err != nil {
+		return err
+	}
+
+	cfg := loadRigConfig(dir)
+
+	for _, item := range items {
+		if !cfg.isInherited(item) {
+			fmt.Printf("  %s — not inherited\n", item)
+			continue
+		}
+
+		// Remove inherited symlinks from this directory
+		itemDir := filepath.Join(dir, item)
+		globalDir := filepath.Join(home, item)
+		removeInheritedSymlinks(itemDir, globalDir)
+
+		// Remove from inherit list
+		for i, v := range cfg.Inherit {
+			if v == item {
+				cfg.Inherit = append(cfg.Inherit[:i], cfg.Inherit[i+1:]...)
+				break
+			}
+		}
+		fmt.Printf("  %s — uninherited\n", item)
+	}
+
+	if err := saveRigConfig(dir, cfg); err != nil {
+		return fmt.Errorf("saving rig config: %w", err)
+	}
+
+	remaining := cfg.Inherit
+	if len(remaining) == 0 {
+		fmt.Printf("Rig %q: no inheritance\n", name)
+	} else {
+		fmt.Printf("Rig %q: inheriting %s\n", name, strings.Join(remaining, ", "))
+	}
+	return nil
+}
+
+// syncGlobalContents symlinks entries from ~/.claude/{skills,agents,hooks,commands}/
+// into the rig's corresponding directories for inherited items.
+// Only creates symlinks for entries that don't already exist locally in the rig.
+// Also cleans up stale symlinks pointing to deleted global entries.
+func syncGlobalContents(rigDir string) error {
+	home, err := globalClaudeHome()
+	if err != nil {
+		return err
+	}
+
+	cfg := loadRigConfig(rigDir)
+
+	for _, item := range inheritableItems {
+		if !cfg.isInherited(item) {
+			continue
+		}
+
+		globalDir := filepath.Join(home, item)
+		localDir := filepath.Join(rigDir, item)
+
+		// Clean up stale symlinks first
+		removeStaleInheritedSymlinks(localDir, globalDir)
+
+		// Read global entries
+		entries, err := os.ReadDir(globalDir)
+		if err != nil {
+			continue // global dir doesn't exist or isn't readable
+		}
+
+		for _, e := range entries {
+			name := e.Name()
+			linkPath := filepath.Join(localDir, name)
+			target := filepath.Join(globalDir, name)
+
+			// Skip if something already exists locally
+			if _, err := os.Lstat(linkPath); err == nil {
+				continue
+			}
+
+			os.Symlink(target, linkPath)
+		}
+	}
+	return nil
+}
+
+// removeInheritedSymlinks removes all symlinks in localDir that point into globalDir.
+func removeInheritedSymlinks(localDir, globalDir string) {
+	entries, err := os.ReadDir(localDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		path := filepath.Join(localDir, e.Name())
+		info, err := os.Lstat(path)
+		if err != nil || info.Mode()&os.ModeSymlink == 0 {
+			continue
+		}
+		target, err := os.Readlink(path)
+		if err != nil {
+			continue
+		}
+		if strings.HasPrefix(target, globalDir+string(os.PathSeparator)) || target == globalDir {
+			os.Remove(path)
+		}
+	}
+}
+
+// removeStaleInheritedSymlinks removes symlinks pointing to entries in globalDir
+// that no longer exist.
+func removeStaleInheritedSymlinks(localDir, globalDir string) {
+	entries, err := os.ReadDir(localDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		path := filepath.Join(localDir, e.Name())
+		info, err := os.Lstat(path)
+		if err != nil || info.Mode()&os.ModeSymlink == 0 {
+			continue
+		}
+		target, err := os.Readlink(path)
+		if err != nil {
+			continue
+		}
+		// Only clean up symlinks pointing into the global dir
+		if !strings.HasPrefix(target, globalDir+string(os.PathSeparator)) {
+			continue
+		}
+		// Remove if target no longer exists
+		if _, err := os.Stat(target); os.IsNotExist(err) {
+			os.Remove(path)
+		}
 	}
 }
 
@@ -504,12 +767,14 @@ func cmdInit() error {
 // and symlinks to shared items in ~/.claude/.
 func cmdCreate(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: claude-rig create <name> [--link-auth] [--isolate <items,...>]")
+		return fmt.Errorf("usage: claude-rig create <name> [--link-auth] [--isolate <items,...>] [--inherit-skills] [--inherit-agents] [--inherit-hooks] [--inherit-commands] [--inherit-all]")
 	}
 
 	var name string
 	var linkAuth bool
 	var isolateItems []string
+	var inheritItems []string
+	var inheritAll bool
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--link-auth":
@@ -520,14 +785,27 @@ func cmdCreate(args []string) error {
 			}
 			i++
 			isolateItems = strings.Split(args[i], ",")
+		case "--inherit-all":
+			inheritAll = true
+		case "--inherit-skills":
+			inheritItems = append(inheritItems, "skills")
+		case "--inherit-agents":
+			inheritItems = append(inheritItems, "agents")
+		case "--inherit-hooks":
+			inheritItems = append(inheritItems, "hooks")
+		case "--inherit-commands":
+			inheritItems = append(inheritItems, "commands")
 		default:
 			if name == "" {
 				name = args[i]
 			}
 		}
 	}
+	if inheritAll {
+		inheritItems = inheritableItems
+	}
 	if name == "" {
-		return fmt.Errorf("usage: claude-rig create <name> [--link-auth] [--isolate <items,...>]")
+		return fmt.Errorf("usage: claude-rig create <name> [--link-auth] [--isolate <items,...>] [--inherit-all]")
 	}
 
 	if err := validateRigName(name); err != nil {
@@ -621,6 +899,19 @@ func cmdCreate(args []string) error {
 		fmt.Println("Linked auth from existing Claude config")
 	}
 
+	// Set up inheritance if requested
+	if len(inheritItems) > 0 {
+		cfg := loadRigConfig(dir)
+		cfg.Inherit = inheritItems
+		if err := saveRigConfig(dir, cfg); err != nil {
+			return fmt.Errorf("saving rig config: %w", err)
+		}
+		if err := syncGlobalContents(dir); err != nil {
+			return fmt.Errorf("syncing inherited contents: %w", err)
+		}
+		fmt.Printf("Inheriting: %s\n", strings.Join(inheritItems, ", "))
+	}
+
 	fmt.Printf("Created rig %q at %s\n", name, dir)
 	fmt.Printf("Launch with: claude-rig launch %s\n", name)
 	return nil
@@ -630,20 +921,36 @@ func cmdCreate(args []string) error {
 // Use "default" as source to clone from ~/.claude/.
 func cmdClone(args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: claude-rig clone <source|default> <dest> [--link-auth]")
+		return fmt.Errorf("usage: claude-rig clone <source|default> <dest> [--link-auth] [--inherit-all]")
 	}
 
 	var positional []string
 	var linkAuth bool
+	var inheritItems []string
+	var inheritAll bool
 	for _, a := range args {
-		if a == "--link-auth" {
+		switch a {
+		case "--link-auth":
 			linkAuth = true
-		} else {
+		case "--inherit-all":
+			inheritAll = true
+		case "--inherit-skills":
+			inheritItems = append(inheritItems, "skills")
+		case "--inherit-agents":
+			inheritItems = append(inheritItems, "agents")
+		case "--inherit-hooks":
+			inheritItems = append(inheritItems, "hooks")
+		case "--inherit-commands":
+			inheritItems = append(inheritItems, "commands")
+		default:
 			positional = append(positional, a)
 		}
 	}
+	if inheritAll {
+		inheritItems = inheritableItems
+	}
 	if len(positional) < 2 {
-		return fmt.Errorf("usage: claude-rig clone <source|default> <dest> [--link-auth]")
+		return fmt.Errorf("usage: claude-rig clone <source|default> <dest> [--link-auth] [--inherit-all]")
 	}
 	srcName, destName := positional[0], positional[1]
 
@@ -683,6 +990,19 @@ func cmdClone(args []string) error {
 			return fmt.Errorf("linking auth files: %w", err)
 		}
 		fmt.Println("Linked auth from existing Claude config")
+	}
+
+	// Set up inheritance if requested
+	if len(inheritItems) > 0 {
+		cfg := loadRigConfig(destDir)
+		cfg.Inherit = inheritItems
+		if err := saveRigConfig(destDir, cfg); err != nil {
+			return fmt.Errorf("saving rig config: %w", err)
+		}
+		if err := syncGlobalContents(destDir); err != nil {
+			return fmt.Errorf("syncing inherited contents: %w", err)
+		}
+		fmt.Printf("Inheriting: %s\n", strings.Join(inheritItems, ", "))
 	}
 
 	fmt.Printf("Cloned %q → %q\n", srcName, destName)
@@ -1129,6 +1449,11 @@ func cmdLaunch(args []string) error {
 	// Refresh shared symlinks in case new files appeared in ~/.claude/
 	if err := syncSharedSymlinks(dir); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: could not sync shared symlinks: %v\n", err)
+	}
+
+	// Sync inherited global contents (skills, agents, hooks, commands)
+	if err := syncGlobalContents(dir); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not sync inherited contents: %v\n", err)
 	}
 
 	binary := claudeCodeBinary()

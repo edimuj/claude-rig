@@ -41,6 +41,16 @@ func claudeHome() (string, error) {
 	return filepath.Join(home, ".claude"), nil
 }
 
+// globalClaudeHome always returns ~/.claude/ regardless of CLAUDE_CONFIG_DIR.
+// Used for inheriting global skills/agents/hooks/commands into rigs.
+func globalClaudeHome() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".claude"), nil
+}
+
 func rigHome() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -97,8 +107,26 @@ var isolatableItems = []string{
 	"paste-cache",
 }
 
+// inheritableItems are rig-specific directories whose contents can be inherited from ~/.claude/.
+// Plugins are excluded — they're managed by `claude plugin install` and have internal state.
+var inheritableItems = []string{
+	"skills",
+	"agents",
+	"commands",
+	"hooks",
+}
+
 func isRigSpecific(name string) bool {
 	for _, item := range rigSpecificItems {
+		if name == item {
+			return true
+		}
+	}
+	return false
+}
+
+func isInheritable(name string) bool {
+	for _, item := range inheritableItems {
 		if name == item {
 			return true
 		}

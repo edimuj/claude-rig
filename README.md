@@ -170,6 +170,8 @@ alias claude-webdev='claude-rig launch webdev'
 
 Each rig gets its own `.claude.json` seeded from the global config on creation. MCP servers configured via `claude mcp add` go directly into the rig's `.claude.json` — no symlinks, no project-level files. Plugins installed within a rig session stay within that rig.
 
+Skills, agents, commands, and hooks can optionally **inherit** from global `~/.claude/` — see [Global Inheritance](#global-inheritance) below.
+
 ### Configurable Isolation
 
 By default, items like history, conversations, and projects are shared across rigs via symlinks. You can isolate any of them per rig:
@@ -190,6 +192,33 @@ claude-rig create cleanroom --isolate history.jsonl,conversations,projects
 
 Isolation config lives in `rig.json` inside the rig directory. When an item is isolated, the symlink is replaced with a local empty file or directory — the rig gets its own independent copy from that point on.
 
+### Global Inheritance
+
+Skills, agents, hooks, and commands defined in `~/.claude/` can be inherited by any rig. This gives you a 3-layer configuration stack — just like how `CLAUDE.md` works:
+
+```
+~/.claude/skills/            ← Global (inherited by rigs that opt in)
+~/.claude-rig/rigs/go/skills/    ← Rig-specific (overrides global by name)
+myproject/.claude/skills/        ← Project-level (native Claude Code discovery)
+```
+
+```bash
+# Inherit all global skills, agents, hooks, and commands
+claude-rig inherit --all myrig
+
+# Or pick what to inherit
+claude-rig inherit skills agents myrig
+
+# Stop inheriting
+claude-rig uninherit skills myrig
+claude-rig uninherit --all myrig
+
+# Or set up at creation time
+claude-rig create myrig --inherit-all --link-auth
+```
+
+Rig-specific files always win — if both `~/.claude/skills/foo/` and the rig have a `skills/foo/`, the rig's version is used. Inherited entries are symlinks; rig-specific entries are real files/directories.
+
 ## Commands
 
 | Command | Description |
@@ -208,6 +237,8 @@ Isolation config lives in `rig.json` inside the rig directory. When an item is i
 | `isolate <rig> <items>` | Isolate items per rig (no sharing via symlinks) |
 | `share <rig> <items>` | Reverse isolation (delete local, recreate symlink) |
 | `isolation [rig]` | Show isolation status for one or all rigs |
+| `inherit <items> [rig]` | Inherit global skills/agents/hooks/commands from `~/.claude/` |
+| `uninherit <items> [rig]` | Stop inheriting (remove global symlinks) |
 | `diff <rig1> <rig2>` | Compare two rigs (auth, settings, plugins, MCP, isolation, etc.) |
 | `export <rig> [file]` | Export rig to `.tar.gz` (`--include-auth`, `--include-data`) |
 | `import <file> <name>` | Import rig from archive (`--link-auth` to link auth after import) |
