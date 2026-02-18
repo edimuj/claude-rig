@@ -2,7 +2,7 @@ BINARY := claude-rig
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -X main.version=$(VERSION)
 
-.PHONY: build install clean run
+.PHONY: build build-windows install clean run
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/claude-rig
@@ -13,5 +13,8 @@ install: build
 run:
 	@go run ./cmd/claude-rig $(ARGS)
 
+build-windows:
+	GOOS=windows GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o $(BINARY).exe ./cmd/claude-rig
+
 clean:
-	rm -f $(BINARY)
+	rm -f $(BINARY) $(BINARY).exe
