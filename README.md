@@ -366,6 +366,16 @@ $ claude-rig diff go minimal
   Isolation:  same (none)
 ```
 
+## Known Limitations
+
+### Remote Control
+
+Claude Code's [Remote Control](https://code.claude.com/docs/en/remote-control) feature works with claude-rig but is fragile when multiple rigs have it enabled simultaneously. All rigs sharing auth (via `--link-auth`) use the same OAuth tokens, causing rate limiting and connection instability when multiple bridge sessions compete.
+
+**Recommendation:** Enable `remoteControlAtStartup` on **one rig only**. The `doctor` command warns when multiple rigs have it enabled.
+
+The underlying issue is a Claude Code bug — when the bridge WebSocket dies, it doesn't recover and the session becomes a zombie (visible in the app but unable to sync). This happens regardless of claude-rig but is more likely with shared auth.
+
 ## Also Check Out
 
 More open-source tools for the Claude Code workflow:

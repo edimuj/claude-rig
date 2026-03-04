@@ -662,6 +662,31 @@ func cmdDoctor() error {
 		return err
 	}
 
+	// Check for multiple rigs with remote control enabled
+	var rcRigs []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dir, _ := rigDir(e.Name())
+		data, err := os.ReadFile(filepath.Join(dir, ".claude.json"))
+		if err != nil {
+			continue
+		}
+		var cfg map[string]any
+		if json.Unmarshal(data, &cfg) == nil {
+			if rc, ok := cfg["remoteControlAtStartup"].(bool); ok && rc {
+				rcRigs = append(rcRigs, e.Name())
+			}
+		}
+	}
+	if len(rcRigs) > 1 {
+		fmt.Println("\nRemote Control:")
+		warn("Multiple rigs have remoteControlAtStartup enabled: %s", strings.Join(rcRigs, ", "))
+		fmt.Println("    Remote Control is fragile with multiple rigs sharing auth.")
+		fmt.Println("    Enable it on one rig only to avoid connection cycling.")
+	}
+
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
