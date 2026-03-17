@@ -15,13 +15,14 @@ No interfaces, no packages, no abstractions. Functions call functions.
 ## Key Concepts
 
 - All state under `~/.claude-rig/` (rigs in `~/.claude-rig/rigs/<name>/`)
-- Rig-specific items (settings, skills, plugins, agents, commands, hooks, mcp.json) = real files
+- Rig-specific items (settings, skills, plugins, agents, commands, hooks) = real files
 - Everything else in `~/.claude/` = symlinked into each rig directory
 - Auth files (`.credentials.json`, `.claude.json`, `statsig/`) shared via `--link-auth`
 - `.claude.json` lives in `~/` not `~/.claude/` — special-cased in auth linking
 - `CLAUDE_CONFIG_DIR` env var points Claude Code at the rig directory
 - `launch` uses `syscall.Exec` (replaces process, not subprocess)
-- `rig.json` in rig dir controls per-rig isolation (`{"isolate": [...]}`) and inheritance (`{"inherit": ["skills", ...]}`)
+- `rig.json` in rig dir controls per-rig isolation (`{"isolate": [...]}`) and inheritance (
+  `{"inherit": ["skills", ...]}`)
 - `syncSharedSymlinks` skips items in rig.json isolate list
 - `syncGlobalContents` symlinks entries from `~/.claude/{skills,agents,hooks,commands}/` into rig for inherited items
 - Inheritance = 3-layer: global (`~/.claude/`) → rig → project (`.claude/`). Rig-local files override inherited symlinks
@@ -29,33 +30,33 @@ No interfaces, no packages, no abstractions. Functions call functions.
 
 ## Command → Function Map
 
-| Command          | Function           | Notes                                                          |
-|------------------|--------------------|----------------------------------------------------------------|
-| `init`           | `cmdInit`          | Shell integration, `.bashrc`/`.zshrc` detection                |
-| `create`         | `cmdCreate`        | Seeds `.claude.json`, creates rig-specific dirs                |
-| `clone`          | `cmdClone`         | `cloneFromDefault` for `~/.claude/`, `cloneDir` for rig-to-rig |
-| `delete`         | `cmdDelete`        | Refuses to delete active rig                                   |
-| `rename`         | `cmdRename`        | Renames rig dir, warns about .claude-rig files                 |
-| `sync`           | `cmdSync`          | Refresh symlinks + inherited contents for one or all rigs      |
-| `update`         | `cmdUpdate`        | Forwards to `claude update`                                    |
-| `list`           | `cmdList`          | `*` for running sessions, auth, skills, plugins, MCP counts    |
-| `launch`         | `cmdLaunch`        | Resolves `.claude-rig` file, sets env, `syscall.Exec`          |
-| `rc`             | `cmdRC`            | Creates/reads `.claude-rig` project file, walks up dirs        |
-| `link-auth`      | `cmdLinkAuth`      | Symlinks auth files, `--from` for cross-rig                    |
-| `unlink-auth`    | `cmdUnlinkAuth`    | Copies auth files back to break sharing                        |
-| `set-args`       | `cmdSetArgs`       | Global or per-rig default launch args                          |
-| `show-args`      | `cmdShowArgs`      |                                                                |
-| `isolate`        | `cmdIsolate`       | Mark items as per-rig (remove symlink, create local)           |
-| `share`          | `cmdShare`         | Reverse isolation (delete local, recreate symlink)             |
-| `isolation`      | `cmdIsolation`     | Show isolation status for one or all rigs                      |
-| `inherit`        | `cmdInherit`       | Enable global inheritance for skills/agents/hooks/commands     |
-| `uninherit`      | `cmdUninherit`     | Disable inheritance, remove global symlinks                    |
+| Command          | Function           | Notes                                                            |
+|------------------|--------------------|------------------------------------------------------------------|
+| `init`           | `cmdInit`          | Shell integration, `.bashrc`/`.zshrc` detection                  |
+| `create`         | `cmdCreate`        | Seeds `.claude.json`, creates rig-specific dirs                  |
+| `clone`          | `cmdClone`         | `cloneFromDefault` for `~/.claude/`, `cloneDir` for rig-to-rig   |
+| `delete`         | `cmdDelete`        | Refuses to delete active rig                                     |
+| `rename`         | `cmdRename`        | Renames rig dir, warns about .claude-rig files                   |
+| `sync`           | `cmdSync`          | Refresh symlinks + inherited contents for one or all rigs        |
+| `update`         | `cmdUpdate`        | Forwards to `claude update`                                      |
+| `list`           | `cmdList`          | `*` for running sessions, auth, skills, plugins, MCP counts      |
+| `launch`         | `cmdLaunch`        | Resolves `.claude-rig` file, sets env, `syscall.Exec`            |
+| `rc`             | `cmdRC`            | Creates/reads `.claude-rig` project file, walks up dirs          |
+| `link-auth`      | `cmdLinkAuth`      | Symlinks auth files, `--from` for cross-rig                      |
+| `unlink-auth`    | `cmdUnlinkAuth`    | Copies auth files back to break sharing                          |
+| `set-args`       | `cmdSetArgs`       | Global or per-rig default launch args                            |
+| `show-args`      | `cmdShowArgs`      |                                                                  |
+| `isolate`        | `cmdIsolate`       | Mark items as per-rig (remove symlink, create local)             |
+| `share`          | `cmdShare`         | Reverse isolation (delete local, recreate symlink)               |
+| `isolation`      | `cmdIsolation`     | Show isolation status for one or all rigs                        |
+| `inherit`        | `cmdInherit`       | Enable global inheritance for skills/agents/hooks/commands       |
+| `uninherit`      | `cmdUninherit`     | Disable inheritance, remove global symlinks                      |
 | `diff`           | `cmdDiff`          | Compare two rigs: auth, settings, plugins, MCP, etc.             |
 | `export`         | `cmdExport`        | tar.gz of rig-specific files; `--include-auth`, `--include-data` |
 | `import`         | `cmdImport`        | Extract archive into new rig; `--link-auth` optional             |
 | `status`         | `cmdStatus`        | Disk, sessions (/proc), last used; overview or single-rig detail |
-| `update-plugins` | `cmdUpdatePlugins` | Parallel across rigs, calls `claude plugin` CLI                |
-| `doctor`         | `cmdDoctor`        | Checks broken symlinks, missing items                          |
+| `update-plugins` | `cmdUpdatePlugins` | Parallel across rigs, calls `claude plugin` CLI                  |
+| `doctor`         | `cmdDoctor`        | Checks broken symlinks, missing items                            |
 
 ## Adding a New Command
 
