@@ -1822,6 +1822,15 @@ func cmdUpdatePlugins(args []string) error {
 				}
 			}
 
+			// Fix orphaned markers on still-installed plugins.
+			// Claude Code's plugin manager aggressively marks cache entries with
+			// .orphaned_at during updates, but sometimes marks the active install
+			// path itself (especially with git-commit-based versions from private
+			// marketplaces). Remove markers from paths still in installed_plugins.json.
+			if cleaned := cleanOrphanedInstalled(dir); cleaned > 0 {
+				fmt.Fprintf(&buf, "  Cleaned %d stale orphan markers\n", cleaned)
+			}
+
 			results[idx] = rigResult{rigName, buf.String(), failed}
 		}(i, name)
 	}
@@ -1857,6 +1866,54 @@ func runClaudePlugin(claudeBin, rigDir string, pluginArgs ...string) (string, er
 
 	out, err := cmd.CombinedOutput()
 	return strings.TrimSpace(string(out)), err
+}
+
+// cleanOrphanedInstalled removes .orphaned_at markers from plugin cache entries
+// that are still referenced in installed_plugins.json. Claude Code's plugin manager
+// sometimes marks the active install path as orphaned during updates (especially
+// for private marketplace plugins with git-commit-based versions).
+func cleanOrphanedInstalled(rigDir string) int {
+	installedPath := filepath.Join(rigDir, "plugins", "installed_plugins.json")
+	data, err := os.ReadFile(installedPath)
+	if err != nil {
+		return 0
+	}
+
+	var manifest struct {
+		Plugins map[string][]struct {
+			InstallPath string `json:"installPath"`
+		} `json:"plugins"`
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return 0
+	}
+
+	// Collect all active install paths
+	activePaths := make(map[string]bool)
+	for _, entries := range manifest.Plugins {
+		for _, e := range entries {
+			if e.InstallPath != "" {
+				activePaths[e.InstallPath] = true
+			}
+		}
+	}
+
+	// Scan cache for .orphaned_at files and remove those on active paths
+	cleaned := 0
+	cacheDir := filepath.Join(rigDir, "plugins", "cache")
+	_ = filepath.WalkDir(cacheDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || d.Name() != ".orphaned_at" {
+			return nil
+		}
+		parent := filepath.Dir(path)
+		if activePaths[parent] {
+			if os.Remove(path) == nil {
+				cleaned++
+			}
+		}
+		return nil
+	})
+	return cleaned
 }
 
 // lastLine returns the last non-empty line from s (result messages are typically last).
