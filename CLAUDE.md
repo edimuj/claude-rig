@@ -7,7 +7,7 @@ Go CLI tool for managing multiple Claude Code configuration rigs.
 Single-binary CLI, `package main` in `cmd/claude-rig/`. Three files:
 
 - `main.go` — entrypoint, command dispatch (`switch` on `os.Args[1]`), usage text
-- `commands.go` — all command implementations + helpers (~2000 lines, the workhorse)
+- `commands.go` — all command implementations + helpers (~3500 lines, the workhorse)
 - `paths.go` — filesystem paths, rig-specific item list, platform detection
 
 No interfaces, no packages, no abstractions. Functions call functions.
@@ -15,16 +15,21 @@ No interfaces, no packages, no abstractions. Functions call functions.
 ## Key Concepts
 
 - All state under `~/.claude-rig/` (rigs in `~/.claude-rig/rigs/<name>/`)
-- Rig-specific items (settings, skills, plugins, agents, commands, hooks) = real files
+- Rig-specific items (settings, skills, plugins, agents, hooks) = real files
+- `commands/` is isolatable — per-rig by default, can be shared via `share`
+- New rigs isolate 21 items by default (conversations, history, sessions, etc.) — only telemetry/usage-data shared
 - Everything else in `~/.claude/` = symlinked into each rig directory
 - Auth files (`.credentials.json`, `.claude.json`, `statsig/`) shared via `--link-auth`
 - `.claude.json` lives in `~/` not `~/.claude/` — special-cased in auth linking
 - `CLAUDE_CONFIG_DIR` env var points Claude Code at the rig directory
 - `launch` uses `syscall.Exec` (replaces process, not subprocess)
-- `rig.json` in rig dir controls per-rig isolation (`{"isolate": [...]}`) and inheritance (
-  `{"inherit": ["skills", ...]}`)
+- `rig.json` in rig dir controls isolation (`{"isolate": [...]}`), inheritance (`{"inherit": [...]}`),
+  and sync tracking (`{"synced_plugins": [...], "synced_mcp": [...]}`)
 - `syncSharedSymlinks` skips items in rig.json isolate list
 - `syncGlobalContents` symlinks entries from `~/.claude/{skills,agents,hooks,commands}/` into rig for inherited items
+- `syncPlugins` copies plugins from global/source rig (symlinks cache dirs, rewrites manifest paths)
+- `syncMCP` merges mcpServers from source `.claude.json` into rig's `.claude.json`
+- `applyIsolation` helper shared by `cmdCreate` and `cloneFromDefault` for default isolation
 - Inheritance = 3-layer: global (`~/.claude/`) → rig → project (`.claude/`). Rig-local files override inherited symlinks
 - Version injected via ldflags from git tags
 
@@ -33,11 +38,11 @@ No interfaces, no packages, no abstractions. Functions call functions.
 | Command          | Function           | Notes                                                            |
 |------------------|--------------------|------------------------------------------------------------------|
 | `init`           | `cmdInit`          | Shell integration, `.bashrc`/`.zshrc` detection                  |
-| `create`         | `cmdCreate`        | Seeds `.claude.json`, creates rig-specific dirs                  |
+| `create`         | `cmdCreate`        | Default isolation (21 items); `--no-isolate-defaults/--isolate-all` |
 | `clone`          | `cmdClone`         | `cloneFromDefault` for `~/.claude/`, `cloneDir` for rig-to-rig   |
 | `delete`         | `cmdDelete`        | Refuses to delete active rig                                     |
 | `rename`         | `cmdRename`        | Renames rig dir, warns about .claude-rig files                   |
-| `sync`           | `cmdSync`          | Refresh symlinks + inherited contents for one or all rigs        |
+| `sync`           | `cmdSync`          | Symlinks + inherited + plugins + MCP; `--no-plugins/--no-mcp/--from` |
 | `update`         | `cmdUpdate`        | Forwards to `claude update`                                      |
 | `list`           | `cmdList`          | `*` for running sessions, auth, skills, plugins, MCP counts      |
 | `launch`         | `cmdLaunch`        | Resolves `.claude-rig` file, sets env, `syscall.Exec`            |
@@ -56,7 +61,7 @@ No interfaces, no packages, no abstractions. Functions call functions.
 | `import`         | `cmdImport`        | Extract archive into new rig; `--link-auth` optional             |
 | `status`         | `cmdStatus`        | Disk, sessions (/proc), last used; overview or single-rig detail |
 | `update-plugins` | `cmdUpdatePlugins` | Parallel across rigs, calls `claude plugin` CLI                  |
-| `doctor`         | `cmdDoctor`        | Checks broken symlinks, missing items                            |
+| `doctor`         | `cmdDoctor`        | Broken symlinks, inherited items, synced plugins/MCP health      |
 
 ## Adding a New Command
 
@@ -73,7 +78,9 @@ make install              # moves to ~/go/bin/
 make run ARGS="version"   # run without installing
 ```
 
-No test suite — manual testing against real `~/.claude-rig/` state.
+```bash
+go test ./...             # unit + integration tests
+```
 
 ## Constraints
 

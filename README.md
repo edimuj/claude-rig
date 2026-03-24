@@ -97,8 +97,8 @@ Clone an existing rig to use it as a starting point, then customize:
 # Clone your go rig into a new one
 claude-rig clone go rust --link-auth
 
-# Create a fully isolated rig — its own history, conversations, projects
-claude-rig create cleanroom --link-auth --isolate history.jsonl,conversations,projects
+# Create a clean slate with nothing isolated (shared everything except always-isolated items)
+claude-rig create cleanroom --link-auth --no-isolate-defaults
 ```
 
 ## Rig-Specific Instructions
@@ -160,34 +160,38 @@ alias claude-webdev='claude-rig launch webdev'
 
 ## What's Isolated vs. Shared
 
-| Always isolated per rig | Shared by default (configurable) |
-|---|---|
-| `settings.json` | `history.jsonl`, `conversations` |
-| `CLAUDE.md` (rig instructions) | `projects`, `todos`, `tasks` |
-| `.claude.json` (MCP servers, state) | `file-history`, `plans`, `cache` |
-| `skills/`, `plugins/`, `agents/` | `debug`, `session-env`, `telemetry` |
-| `commands/`, `hooks/` | All other `~/.claude/` files |
+| Always per-rig | Per-rig, inheritable/syncable | Isolated by default | Shared by default |
+|---|---|---|---|
+| `settings.json` | `skills/` (inherit) | `conversations`, `history.jsonl`, `sessions` | `telemetry` |
+| `CLAUDE.md` | `agents/` (inherit) | `channels`, `tasks`, `todos`, `backups` | `usage-data` |
+| `.claude.json` | `hooks/` (inherit) | `shell-snapshots`, `projects`, `plans` | |
+| | `commands/` (inherit or isolate/share) | `paste-cache`, `ide`, `downloads`, `debug` | |
+| | `plugins/` (sync from global) | `file-history`, `session-env`, `cache` | |
+| | `mcp` (sync from global) | `stats-cache.json`, `statusline`, `chrome` | |
 
-Each rig gets its own `.claude.json` seeded from the global config on creation. MCP servers configured via `claude mcp add` go directly into the rig's `.claude.json` — no symlinks, no project-level files. Plugins installed within a rig session stay within that rig.
+New rigs isolate 21 items by default — only `telemetry` and `usage-data` remain shared. Skills, agents, hooks, and commands are per-rig but can **inherit** entries from global `~/.claude/` (see [Global Inheritance](#global-inheritance)). Plugins and MCP servers can be **synced** from global (see [Plugin & MCP Sync](#plugin--mcp-sync)).
 
-Skills, agents, commands, and hooks can optionally **inherit** from global `~/.claude/` — see [Global Inheritance](#global-inheritance) below.
+Each rig gets its own `.claude.json` seeded from the global config on creation. MCP servers configured via `claude mcp add` go directly into the rig's `.claude.json` — no symlinks, no project-level files.
 
 ### Configurable Isolation
 
-By default, items like history, conversations, and projects are shared across rigs via symlinks. You can isolate any of them per rig:
+New rigs come with sensible defaults already isolated. You can further isolate shared items or un-isolate defaults:
 
 ```bash
-# Give a rig its own private history and conversations
-claude-rig isolate myrig history.jsonl conversations projects
-
 # See what's isolated vs shared
 claude-rig isolation myrig
 
-# Change your mind — share them again
-claude-rig share myrig history.jsonl
+# Share something that's isolated by default
+claude-rig share myrig conversations
 
-# Or isolate at creation time
-claude-rig create cleanroom --isolate history.jsonl,conversations,projects
+# Isolate something that's currently shared
+claude-rig isolate myrig telemetry
+
+# Create with no default isolation (everything shared except always-isolated items)
+claude-rig create bare --no-isolate-defaults --link-auth
+
+# Create with everything isolated
+claude-rig create fortress --isolate-all --link-auth
 ```
 
 Isolation config lives in `rig.json` inside the rig directory. When an item is isolated, the symlink is replaced with a local empty file or directory — the rig gets its own independent copy from that point on.
@@ -219,12 +223,50 @@ claude-rig create myrig --inherit-all --link-auth
 
 Rig-specific files always win — if both `~/.claude/skills/foo/` and the rig have a `skills/foo/`, the rig's version is used. Inherited entries are symlinks; rig-specific entries are real files/directories.
 
+### Plugin & MCP Sync
+
+The `sync` command keeps plugins and MCP servers aligned across rigs in addition to symlinks and inherited items.
+
+**Plugins** are synced by symlinking cache directories from global `~/.claude/` (or another rig via `--from`) into the rig, then rewriting manifest paths to match. This avoids duplicating plugin data while keeping each rig's plugin state consistent.
+
+**MCP servers** are merged from the global `~/.claude.json` into the rig's `.claude.json`. Local entries take precedence — if a rig defines its own version of an MCP server, the global one is skipped.
+
+**Tracking:** Synced items are recorded in `rig.json` (`synced_plugins`, `synced_mcp`) so that `isolate` and `share` can cleanly add or remove them.
+
+```bash
+# Sync everything (symlinks, inherited items, plugins, MCP) for all rigs
+claude-rig sync
+
+# Sync a single rig
+claude-rig sync myrig
+
+# Sync from another rig instead of global
+claude-rig sync myrig --from webdev
+
+# Skip plugins or MCP during sync
+claude-rig sync myrig --no-plugins
+claude-rig sync myrig --no-mcp
+
+# Skip inherited items during sync
+claude-rig sync myrig --no-inherit
+
+# Isolate plugins — removes synced plugins from the rig
+claude-rig isolate myrig plugins
+
+# Share them back — re-syncs plugins from global
+claude-rig share myrig plugins
+
+# Same for MCP servers
+claude-rig isolate myrig mcp
+claude-rig share myrig mcp
+```
+
 ## Commands
 
 | Command | Description |
 |---|---|
 | `init` | Initialize claude-rig and install shell integration |
-| `create <name>` | Create a new rig (`--link-auth` to reuse existing auth) |
+| `create <name>` | Create a new rig with default isolation (`--link-auth`, `--no-isolate-defaults`, `--isolate-all`) |
 | `clone <src\|default> <dest>` | Clone a rig or `~/.claude/` config (`--link-auth` to share auth) |
 | `delete <name>` | Delete a rig |
 | `rename <old> <new>` | Rename a rig |
@@ -235,8 +277,8 @@ Rig-specific files always win — if both `~/.claude/skills/foo/` and the rig ha
 | `unlink-auth <name>` | Remove shared auth so the rig gets its own |
 | `set-args [name] <args>` | Set default launch args (global or per-rig) |
 | `show-args [name]` | Show default launch args |
-| `isolate <rig> <items>` | Isolate items per rig (no sharing via symlinks) |
-| `share <rig> <items>` | Reverse isolation (delete local, recreate symlink) |
+| `isolate <rig> <items>` | Isolate items per rig — supports files, dirs, `plugins`, `mcp` |
+| `share <rig> <items>` | Reverse isolation — supports files, dirs, `plugins`, `mcp` |
 | `isolation [rig]` | Show isolation status for one or all rigs |
 | `inherit <items> [rig]` | Inherit global skills/agents/hooks/commands from `~/.claude/` |
 | `uninherit <items> [rig]` | Stop inheriting (remove global symlinks) |
@@ -245,9 +287,9 @@ Rig-specific files always win — if both `~/.claude/skills/foo/` and the rig ha
 | `import <file> <name>` | Import rig from archive (`--link-auth` to link auth after import) |
 | `status [rig]` | Show rig status: disk usage, running sessions, last used |
 | `update-plugins [rigs]` | Update marketplace plugins across rigs (all if none specified) |
-| `sync [rig]` | Refresh symlinks and inherited contents (all rigs if none given) |
+| `sync [rig]` | Sync symlinks, inherited items, plugins, MCP (all rigs if none given) |
 | `update` | Update Claude Code (forwards to `claude update`) |
-| `doctor` | Diagnose broken symlinks and missing items |
+| `doctor` | Diagnose broken symlinks, plugin/MCP health, inherited items |
 
 ## How It Works
 
@@ -258,12 +300,12 @@ Each rig is a full config directory under `~/.claude-rig/rigs/<name>/`:
     .claude.json            ← Real file (MCP servers, onboarding state)
     CLAUDE.md               ← Real file (rig-specific instructions)
     settings.json           ← Real file (rig-specific config)
-    rig.json                ← Real file (isolation config, optional)
+    rig.json                ← Isolation config, synced_plugins, synced_mcp tracking
     skills/                 ← Real directory
-    plugins/                ← Real directory
-    history.jsonl           ← Real file (if isolated) or symlink (if shared)
-    conversations/          ← Real dir (if isolated) or symlink (if shared)
-    todos/ → ~/.claude/     ← Symlink (shared)
+    plugins/                ← Real directory (synced from global by default)
+    conversations/          ← Real dir (isolated by default)
+    history.jsonl           ← Real file (isolated by default)
+    telemetry/ → ~/.claude/ ← Symlink (shared by default)
     ...
 ```
 

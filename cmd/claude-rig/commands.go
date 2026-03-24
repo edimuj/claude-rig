@@ -18,8 +18,25 @@ import (
 
 // rigConfig holds per-rig configuration stored in rig.json.
 type rigConfig struct {
-	Isolate []string `json:"isolate,omitempty"`
-	Inherit []string `json:"inherit,omitempty"`
+	Isolate       []string `json:"isolate,omitempty"`
+	Inherit       []string `json:"inherit,omitempty"`
+	SyncedPlugins []string `json:"synced_plugins,omitempty"`
+	SyncedMCP     []string `json:"synced_mcp,omitempty"`
+}
+
+// pluginManifest represents installed_plugins.json.
+type pluginManifest struct {
+	Version int                      `json:"version"`
+	Plugins map[string][]pluginEntry `json:"plugins"`
+}
+
+type pluginEntry struct {
+	Scope        string `json:"scope"`
+	InstallPath  string `json:"installPath"`
+	Version      string `json:"version"`
+	InstalledAt  string `json:"installedAt"`
+	LastUpdated  string `json:"lastUpdated"`
+	GitCommitSha string `json:"gitCommitSha"`
 }
 
 func loadRigConfig(rigDir string) rigConfig {
@@ -58,6 +75,51 @@ func (c rigConfig) isInherited(name string) bool {
 	return false
 }
 
+// applyIsolation saves isolation config and creates local files/dirs for isolated items.
+// Items that already exist in the rig directory are skipped (e.g. rig-specific items).
+func applyIsolation(rigDir string, items []string) error {
+	if len(items) == 0 {
+		return nil
+	}
+	cfg := loadRigConfig(rigDir)
+	for _, item := range items {
+		found := false
+		for _, existing := range cfg.Isolate {
+			if item == existing {
+				found = true
+				break
+			}
+		}
+		if !found {
+			cfg.Isolate = append(cfg.Isolate, item)
+		}
+	}
+	if err := saveRigConfig(rigDir, cfg); err != nil {
+		return fmt.Errorf("saving rig config: %w", err)
+	}
+
+	home, _ := globalClaudeHome()
+	for _, item := range items {
+		localPath := filepath.Join(rigDir, item)
+		// Skip if already exists (e.g. created as rig-specific item)
+		if _, err := os.Lstat(localPath); err == nil {
+			continue
+		}
+		srcPath := filepath.Join(home, item)
+		srcInfo, srcErr := os.Stat(srcPath)
+		if srcErr == nil && srcInfo.IsDir() {
+			os.MkdirAll(localPath, 0755)
+		} else if strings.HasSuffix(item, ".json") || strings.HasSuffix(item, ".jsonl") {
+			os.WriteFile(localPath, []byte(""), 0644)
+		} else if strings.Contains(item, ".") {
+			os.WriteFile(localPath, []byte(""), 0644)
+		} else {
+			os.MkdirAll(localPath, 0755)
+		}
+	}
+	return nil
+}
+
 // cmdIsolate marks items as isolated for a rig.
 func cmdIsolate(args []string) error {
 	if len(args) < 2 {
@@ -73,7 +135,7 @@ func cmdIsolate(args []string) error {
 		return fmt.Errorf("rig %q does not exist", name)
 	}
 
-	home, err := claudeHome()
+	home, err := globalClaudeHome()
 	if err != nil {
 		return err
 	}
@@ -87,6 +149,30 @@ func cmdIsolate(args []string) error {
 		}
 		if cfg.isIsolated(item) {
 			fmt.Printf("  %s — already isolated\n", item)
+			continue
+		}
+
+		// Special handling for plugins and mcp (not file-level items)
+		switch item {
+		case "plugins":
+			cleanupSyncedPlugins(dir, cfg.SyncedPlugins)
+			if len(cfg.SyncedPlugins) > 0 {
+				fmt.Printf("  plugins — removed %d synced plugin(s)\n", len(cfg.SyncedPlugins))
+			} else {
+				fmt.Printf("  plugins — isolated (future syncs will skip)\n")
+			}
+			cfg.SyncedPlugins = nil
+			cfg.Isolate = append(cfg.Isolate, item)
+			continue
+		case "mcp":
+			cleanupSyncedMCP(dir, cfg.SyncedMCP)
+			if len(cfg.SyncedMCP) > 0 {
+				fmt.Printf("  mcp — removed %d synced server(s)\n", len(cfg.SyncedMCP))
+			} else {
+				fmt.Printf("  mcp — isolated (future syncs will skip)\n")
+			}
+			cfg.SyncedMCP = nil
+			cfg.Isolate = append(cfg.Isolate, item)
 			continue
 		}
 
@@ -146,7 +232,9 @@ func cmdShare(args []string) error {
 		return fmt.Errorf("rig %q does not exist", name)
 	}
 
-	home, err := claudeHome()
+	// Always use global ~/.claude/ as symlink target, not CLAUDE_CONFIG_DIR
+	// (which may be the rig itself, causing circular symlinks)
+	home, err := globalClaudeHome()
 	if err != nil {
 		return err
 	}
@@ -156,10 +244,56 @@ func cmdShare(args []string) error {
 
 	for _, item := range items {
 		if !isIsolatable(item) {
-			return fmt.Errorf("%q is not isolatable. Valid items: %s", item, strings.Join(isolatableItems, ", "))
+			return fmt.Errorf("%q is not shareable. Valid items: %s", item, strings.Join(isolatableItems, ", "))
 		}
-		if !cfg.isIsolated(item) {
-			fmt.Printf("  %s — already shared\n", item)
+
+		// Special handling for plugins and mcp
+		switch item {
+		case "plugins":
+			// Remove from isolate list first so sync can proceed
+			for i, v := range cfg.Isolate {
+				if v == item {
+					cfg.Isolate = append(cfg.Isolate[:i], cfg.Isolate[i+1:]...)
+					break
+				}
+			}
+			sourcePluginsDir := filepath.Join(home, "plugins")
+			synced, err := syncPlugins(dir, sourcePluginsDir)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "  plugins — sync error: %v\n", err)
+			} else if len(synced) > 0 {
+				cfg.SyncedPlugins = append(cfg.SyncedPlugins, synced...)
+				fmt.Printf("  plugins — synced %d plugin(s) from global\n", len(synced))
+			} else {
+				fmt.Printf("  plugins — shared (no new plugins to sync)\n")
+			}
+			continue
+		case "mcp":
+			for i, v := range cfg.Isolate {
+				if v == item {
+					cfg.Isolate = append(cfg.Isolate[:i], cfg.Isolate[i+1:]...)
+					break
+				}
+			}
+			userHome, _ := os.UserHomeDir()
+			sourceClaudeJSON := filepath.Join(userHome, ".claude.json")
+			synced, err := syncMCP(dir, sourceClaudeJSON)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "  mcp — sync error: %v\n", err)
+			} else if len(synced) > 0 {
+				cfg.SyncedMCP = append(cfg.SyncedMCP, synced...)
+				fmt.Printf("  mcp — synced %d server(s) from global\n", len(synced))
+			} else {
+				fmt.Printf("  mcp — shared (no new servers to sync)\n")
+			}
+			continue
+		}
+
+		linkPath := filepath.Join(dir, item)
+
+		// Check actual filesystem state — a symlink means already shared
+		if info, err := os.Lstat(linkPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
+			fmt.Printf("  %s — already shared (symlink)\n", item)
 			continue
 		}
 
@@ -168,8 +302,6 @@ func cmdShare(args []string) error {
 			fmt.Printf("  %s — skipped (does not exist in ~/.claude/)\n", item)
 			continue
 		}
-
-		linkPath := filepath.Join(dir, item)
 
 		// Remove local copy
 		os.RemoveAll(linkPath)
@@ -243,13 +375,38 @@ func cmdIsolation(args []string) error {
 }
 
 func printIsolationStatus(name string, cfg rigConfig) {
+	dir, _ := rigDir(name)
 	fmt.Printf("%s:\n", name)
 	for _, item := range isolatableItems {
-		status := "shared"
-		if cfg.isIsolated(item) {
-			status = "isolated"
+		switch item {
+		case "plugins":
+			if cfg.isIsolated(item) {
+				fmt.Printf("  %-20s isolated\n", item)
+			} else if len(cfg.SyncedPlugins) > 0 {
+				fmt.Printf("  %-20s shared (%d synced)\n", item, len(cfg.SyncedPlugins))
+			} else {
+				fmt.Printf("  %-20s shared\n", item)
+			}
+		case "mcp":
+			if cfg.isIsolated(item) {
+				fmt.Printf("  %-20s isolated\n", item)
+			} else if len(cfg.SyncedMCP) > 0 {
+				fmt.Printf("  %-20s shared (%d synced)\n", item, len(cfg.SyncedMCP))
+			} else {
+				fmt.Printf("  %-20s shared\n", item)
+			}
+		default:
+			status := "shared"
+			linkPath := filepath.Join(dir, item)
+			if info, err := os.Lstat(linkPath); err == nil {
+				if info.Mode()&os.ModeSymlink == 0 {
+					status = "isolated"
+				}
+			} else {
+				status = "absent"
+			}
+			fmt.Printf("  %-20s %s\n", item, status)
 		}
-		fmt.Printf("  %-20s %s\n", item, status)
 	}
 	if len(cfg.Inherit) > 0 {
 		fmt.Printf("  Inheriting: %s\n", strings.Join(cfg.Inherit, ", "))
@@ -736,6 +893,90 @@ func cmdDoctor() error {
 		if brokenLinks == 0 {
 			ok("All symlinks valid")
 		}
+
+		cfg := loadRigConfig(dir)
+
+		// Check inherited items: symlinks should resolve to non-empty targets
+		for _, item := range cfg.Inherit {
+			itemDir := filepath.Join(dir, item)
+			entries, err := os.ReadDir(itemDir)
+			if err != nil {
+				warn("Inherited %s: directory missing", item)
+				continue
+			}
+			brokenInherited := 0
+			for _, entry := range entries {
+				entryPath := filepath.Join(itemDir, entry.Name())
+				info, err := os.Lstat(entryPath)
+				if err != nil || info.Mode()&os.ModeSymlink == 0 {
+					continue
+				}
+				target, err := os.Readlink(entryPath)
+				if err != nil {
+					brokenInherited++
+					continue
+				}
+				if _, err := os.Stat(target); os.IsNotExist(err) {
+					warn("Inherited %s/%s: broken symlink → %s", item, entry.Name(), target)
+					brokenInherited++
+				}
+			}
+			if brokenInherited == 0 {
+				ok("Inherited %s: %d entries", item, len(entries))
+			}
+		}
+
+		// Check synced plugins: cache symlinks valid, manifest entries consistent
+		if len(cfg.SyncedPlugins) > 0 {
+			tgtPluginsDir := filepath.Join(dir, "plugins")
+			manifest, err := readPluginManifest(filepath.Join(tgtPluginsDir, "installed_plugins.json"))
+			brokenPlugins := 0
+			if err != nil {
+				warn("Synced plugins: cannot read manifest")
+			} else {
+				for _, pluginName := range cfg.SyncedPlugins {
+					entries, ok := manifest.Plugins[pluginName]
+					if !ok || len(entries) == 0 {
+						warn("Synced plugin %s: missing from manifest", pluginName)
+						brokenPlugins++
+						continue
+					}
+					installPath := entries[0].InstallPath
+					if info, err := os.Lstat(installPath); err != nil {
+						warn("Synced plugin %s: cache missing: %s", pluginName, installPath)
+						brokenPlugins++
+					} else if info.Mode()&os.ModeSymlink != 0 {
+						target, _ := os.Readlink(installPath)
+						if _, err := os.Stat(target); os.IsNotExist(err) {
+							warn("Synced plugin %s: broken cache symlink → %s", pluginName, target)
+							brokenPlugins++
+						}
+					}
+				}
+			}
+			if brokenPlugins == 0 {
+				ok("Synced plugins: %d ok", len(cfg.SyncedPlugins))
+			}
+		}
+
+		// Check synced MCP: servers still present in .claude.json
+		if len(cfg.SyncedMCP) > 0 {
+			claudeJSON, _ := readJSONFile(filepath.Join(dir, ".claude.json"))
+			mcpServers, _ := claudeJSON["mcpServers"].(map[string]any)
+			missingMCP := 0
+			for _, serverName := range cfg.SyncedMCP {
+				if mcpServers == nil {
+					warn("Synced MCP %s: .claude.json has no mcpServers", serverName)
+					missingMCP++
+				} else if _, exists := mcpServers[serverName]; !exists {
+					warn("Synced MCP %s: missing from .claude.json", serverName)
+					missingMCP++
+				}
+			}
+			if missingMCP == 0 {
+				ok("Synced MCP: %d servers ok", len(cfg.SyncedMCP))
+			}
+		}
 	}
 
 	fmt.Println()
@@ -792,12 +1033,14 @@ func cmdInit() error {
 // and symlinks to shared items in ~/.claude/.
 func cmdCreate(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: claude-rig create <name> [--link-auth] [--isolate <items,...>] [--inherit-skills] [--inherit-agents] [--inherit-hooks] [--inherit-commands] [--inherit-all]")
+		return fmt.Errorf("usage: claude-rig create <name> [--link-auth] [--isolate <items,...>] [--no-isolate-defaults] [--isolate-all] [--inherit-skills] [--inherit-agents] [--inherit-hooks] [--inherit-commands] [--inherit-all]")
 	}
 
 	var name string
 	var linkAuth bool
-	var isolateItems []string
+	var extraIsolateItems []string
+	var noIsolateDefaults bool
+	var isolateAll bool
 	var inheritItems []string
 	var inheritAll bool
 	for i := 0; i < len(args); i++ {
@@ -809,7 +1052,11 @@ func cmdCreate(args []string) error {
 				return fmt.Errorf("--isolate requires a comma-separated list of items")
 			}
 			i++
-			isolateItems = strings.Split(args[i], ",")
+			extraIsolateItems = strings.Split(args[i], ",")
+		case "--no-isolate-defaults":
+			noIsolateDefaults = true
+		case "--isolate-all":
+			isolateAll = true
 		case "--inherit-all":
 			inheritAll = true
 		case "--inherit-skills":
@@ -830,7 +1077,28 @@ func cmdCreate(args []string) error {
 		inheritItems = inheritableItems
 	}
 	if name == "" {
-		return fmt.Errorf("usage: claude-rig create <name> [--link-auth] [--isolate <items,...>] [--inherit-all]")
+		return fmt.Errorf("usage: claude-rig create <name> [--link-auth] [--isolate <items,...>] [--no-isolate-defaults] [--isolate-all] [--inherit-all]")
+	}
+
+	// Build final isolate list
+	var isolateItems []string
+	if isolateAll {
+		isolateItems = append([]string{}, isolatableItems...)
+	} else if !noIsolateDefaults {
+		isolateItems = append([]string{}, defaultIsolatedItems...)
+	}
+	// Merge extra items, deduplicating
+	for _, item := range extraIsolateItems {
+		found := false
+		for _, existing := range isolateItems {
+			if item == existing {
+				found = true
+				break
+			}
+		}
+		if !found {
+			isolateItems = append(isolateItems, item)
+		}
 	}
 
 	if err := validateRigName(name); err != nil {
@@ -882,33 +1150,28 @@ func cmdCreate(args []string) error {
 		fmt.Fprintf(os.Stderr, "Warning: could not seed .claude.json: %v\n", err)
 	}
 
-	// Write isolation config before syncing symlinks
+	// Apply isolation before syncing symlinks
 	if len(isolateItems) > 0 {
 		for _, item := range isolateItems {
 			if !isIsolatable(item) {
 				return fmt.Errorf("%q is not isolatable. Valid items: %s", item, strings.Join(isolatableItems, ", "))
 			}
 		}
-		cfg := rigConfig{Isolate: isolateItems}
-		if err := saveRigConfig(dir, cfg); err != nil {
-			return fmt.Errorf("saving rig config: %w", err)
+		if err := applyIsolation(dir, isolateItems); err != nil {
+			return fmt.Errorf("applying isolation: %w", err)
 		}
-
-		// Create local files/dirs for isolated items
-		home, _ := claudeHome()
-		for _, item := range isolateItems {
-			localPath := filepath.Join(dir, item)
-			srcPath := filepath.Join(home, item)
-			srcInfo, srcErr := os.Stat(srcPath)
-			if srcErr == nil && srcInfo.IsDir() {
-				os.MkdirAll(localPath, 0755)
-			} else if strings.Contains(item, ".") {
-				os.WriteFile(localPath, []byte(""), 0644)
+		if !noIsolateDefaults && !isolateAll {
+			extra := len(isolateItems) - len(defaultIsolatedItems)
+			if extra > 0 {
+				fmt.Printf("Isolated: %d defaults + %d extra\n", len(defaultIsolatedItems), extra)
 			} else {
-				os.MkdirAll(localPath, 0755)
+				fmt.Printf("Isolated: %d items (defaults)\n", len(isolateItems))
 			}
+		} else if isolateAll {
+			fmt.Printf("Isolated: all %d items\n", len(isolateItems))
+		} else {
+			fmt.Printf("Isolated: %s\n", strings.Join(isolateItems, ", "))
 		}
-		fmt.Printf("Isolated: %s\n", strings.Join(isolateItems, ", "))
 	}
 
 	// Symlink shared items from ~/.claude/
@@ -946,17 +1209,20 @@ func cmdCreate(args []string) error {
 // Use "default" as source to clone from ~/.claude/.
 func cmdClone(args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: claude-rig clone <source|default> <dest> [--link-auth] [--inherit-all]")
+		return fmt.Errorf("usage: claude-rig clone <source|default> <dest> [--link-auth] [--no-isolate-defaults] [--inherit-all]")
 	}
 
 	var positional []string
 	var linkAuth bool
+	var noIsolateDefaults bool
 	var inheritItems []string
 	var inheritAll bool
 	for _, a := range args {
 		switch a {
 		case "--link-auth":
 			linkAuth = true
+		case "--no-isolate-defaults":
+			noIsolateDefaults = true
 		case "--inherit-all":
 			inheritAll = true
 		case "--inherit-skills":
@@ -975,7 +1241,7 @@ func cmdClone(args []string) error {
 		inheritItems = inheritableItems
 	}
 	if len(positional) < 2 {
-		return fmt.Errorf("usage: claude-rig clone <source|default> <dest> [--link-auth] [--inherit-all]")
+		return fmt.Errorf("usage: claude-rig clone <source|default> <dest> [--link-auth] [--no-isolate-defaults] [--inherit-all]")
 	}
 	srcName, destName := positional[0], positional[1]
 
@@ -992,7 +1258,11 @@ func cmdClone(args []string) error {
 	}
 
 	if srcName == "default" {
-		if err := cloneFromDefault(destDir); err != nil {
+		var isolateItems []string
+		if !noIsolateDefaults {
+			isolateItems = defaultIsolatedItems
+		}
+		if err := cloneFromDefault(destDir, isolateItems); err != nil {
 			os.RemoveAll(destDir)
 			return fmt.Errorf("cloning from default: %w", err)
 		}
@@ -1036,8 +1306,8 @@ func cmdClone(args []string) error {
 }
 
 // cloneFromDefault creates a new rig by copying rig-specific items from ~/.claude/
-// and symlinking everything else.
-func cloneFromDefault(destDir string) error {
+// and symlinking everything else. isolateItems are isolated before syncing symlinks.
+func cloneFromDefault(destDir string, isolateItems []string) error {
 	userHome, err := os.UserHomeDir()
 	if err != nil {
 		return err
@@ -1111,6 +1381,11 @@ func cloneFromDefault(destDir string) error {
 				}
 			}
 		}
+	}
+
+	// Apply isolation before syncing symlinks
+	if err := applyIsolation(destDir, isolateItems); err != nil {
+		return fmt.Errorf("applying isolation: %w", err)
 	}
 
 	// Symlink shared items from ~/.claude/
@@ -1480,18 +1755,35 @@ func cmdSync(args []string) error {
 	}
 
 	var names []string
-	if len(args) > 0 {
-		// Sync specific rig
-		name := args[0]
-		dir, err := rigDir(name)
-		if err != nil {
-			return err
+	var noPlugins, noMCP, noInherit bool
+	var fromRig string
+	for _, a := range args {
+		switch a {
+		case "--no-plugins":
+			noPlugins = true
+		case "--no-mcp":
+			noMCP = true
+		case "--no-inherit":
+			noInherit = true
+		default:
+			if strings.HasPrefix(a, "--from=") {
+				fromRig = strings.TrimPrefix(a, "--from=")
+			} else if a == "--from" {
+				// handled below with next arg
+			} else if fromRig == "" && len(names) == 0 && !strings.HasPrefix(a, "-") {
+				// Could be rig name or --from value
+				names = append(names, a)
+			}
 		}
-		if _, err := os.Stat(dir); os.IsNotExist(err) {
-			return fmt.Errorf("rig %q does not exist", name)
+	}
+	// Handle --from <value> (two-arg form)
+	for i, a := range args {
+		if a == "--from" && i+1 < len(args) {
+			fromRig = args[i+1]
 		}
-		names = append(names, name)
-	} else {
+	}
+
+	if len(names) == 0 {
 		// Sync all rigs
 		entries, err := os.ReadDir(root)
 		if err != nil {
@@ -1506,21 +1798,97 @@ func cmdSync(args []string) error {
 				names = append(names, e.Name())
 			}
 		}
+	} else {
+		// Validate the specified rig exists
+		dir, err := rigDir(names[0])
+		if err != nil {
+			return err
+		}
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			return fmt.Errorf("rig %q does not exist", names[0])
+		}
+	}
+
+	// Determine source dirs for plugin/MCP sync
+	home, _ := globalClaudeHome()
+	userHome, _ := os.UserHomeDir()
+	sourcePluginsDir := filepath.Join(home, "plugins")
+	sourceClaudeJSON := filepath.Join(userHome, ".claude.json")
+
+	if fromRig != "" {
+		fromDir, err := rigDir(fromRig)
+		if err != nil {
+			return err
+		}
+		if _, err := os.Stat(fromDir); os.IsNotExist(err) {
+			return fmt.Errorf("source rig %q does not exist", fromRig)
+		}
+		sourcePluginsDir = filepath.Join(fromDir, "plugins")
+		sourceClaudeJSON = filepath.Join(fromDir, ".claude.json")
+		fmt.Printf("Source: rig %q\n", fromRig)
 	}
 
 	for _, name := range names {
 		dir, _ := rigDir(name)
+		cfg := loadRigConfig(dir)
+
+		// 1. Shared symlinks
 		if err := syncSharedSymlinks(dir); err != nil {
 			fmt.Fprintf(os.Stderr, "  %s: symlink sync error: %v\n", name, err)
 			continue
 		}
-		if err := syncGlobalContents(dir); err != nil {
-			fmt.Fprintf(os.Stderr, "  %s: inheritance sync error: %v\n", name, err)
-			continue
+
+		// 2. Inherited contents (skills, agents, commands, hooks)
+		if !noInherit {
+			if err := syncGlobalContents(dir); err != nil {
+				fmt.Fprintf(os.Stderr, "  %s: inheritance sync error: %v\n", name, err)
+			}
 		}
+
+		// 3. Plugins
+		if !noPlugins && !cfg.isIsolated("plugins") {
+			synced, err := syncPlugins(dir, sourcePluginsDir)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "  %s: plugin sync error: %v\n", name, err)
+			} else if len(synced) > 0 {
+				cfg.SyncedPlugins = appendUnique(cfg.SyncedPlugins, synced...)
+				saveRigConfig(dir, cfg)
+				fmt.Printf("  %s — synced %d plugin(s)\n", name, len(synced))
+			}
+		}
+
+		// 4. MCP servers
+		if !noMCP && !cfg.isIsolated("mcp") {
+			synced, err := syncMCP(dir, sourceClaudeJSON)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "  %s: MCP sync error: %v\n", name, err)
+			} else if len(synced) > 0 {
+				cfg.SyncedMCP = appendUnique(cfg.SyncedMCP, synced...)
+				saveRigConfig(dir, cfg)
+				fmt.Printf("  %s — synced %d MCP server(s)\n", name, len(synced))
+			}
+		}
+
 		fmt.Printf("  %s — synced\n", name)
 	}
 	return nil
+}
+
+// appendUnique appends items to a slice, skipping duplicates.
+func appendUnique(slice []string, items ...string) []string {
+	for _, item := range items {
+		found := false
+		for _, existing := range slice {
+			if item == existing {
+				found = true
+				break
+			}
+		}
+		if !found {
+			slice = append(slice, item)
+		}
+	}
+	return slice
 }
 
 // cmdUpdate forwards to `claude update`.
@@ -2056,6 +2424,273 @@ func syncSharedSymlinks(rigDir string) error {
 	return nil
 }
 
+// --- Plugin and MCP sync ---
+
+// readPluginManifest reads and parses installed_plugins.json.
+func readPluginManifest(path string) (pluginManifest, error) {
+	var m pluginManifest
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return m, err
+	}
+	err = json.Unmarshal(data, &m)
+	if m.Plugins == nil {
+		m.Plugins = make(map[string][]pluginEntry)
+	}
+	return m, err
+}
+
+// writePluginManifest writes installed_plugins.json.
+func writePluginManifest(path string, m pluginManifest) error {
+	data, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(data, '\n'), 0644)
+}
+
+// readJSONFile reads and parses a JSON file into a map.
+func readJSONFile(path string) (map[string]any, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]any
+	err = json.Unmarshal(data, &m)
+	return m, err
+}
+
+// writeJSONFile writes a map as formatted JSON.
+func writeJSONFile(path string, m map[string]any) error {
+	data, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(data, '\n'), 0644)
+}
+
+// syncPlugins copies missing plugins from source plugins dir into the rig.
+// Symlinks cache version dirs from source. Returns newly synced plugin names.
+func syncPlugins(rigDir, sourcePluginsDir string) ([]string, error) {
+	srcManifestPath := filepath.Join(sourcePluginsDir, "installed_plugins.json")
+	tgtPluginsDir := filepath.Join(rigDir, "plugins")
+	tgtManifestPath := filepath.Join(tgtPluginsDir, "installed_plugins.json")
+
+	srcManifest, err := readPluginManifest(srcManifestPath)
+	if err != nil {
+		return nil, nil // no source plugins
+	}
+
+	tgtManifest, err := readPluginManifest(tgtManifestPath)
+	if err != nil {
+		tgtManifest = pluginManifest{Version: 2, Plugins: make(map[string][]pluginEntry)}
+	}
+
+	// Read source settings for enabledPlugins
+	srcSettingsPath := filepath.Join(filepath.Dir(sourcePluginsDir), "settings.json")
+	srcSettings, _ := readJSONFile(srcSettingsPath)
+	srcEnabled, _ := srcSettings["enabledPlugins"].(map[string]any)
+
+	var synced []string
+
+	for name, entries := range srcManifest.Plugins {
+		if _, exists := tgtManifest.Plugins[name]; exists {
+			continue // already in target
+		}
+		if len(entries) == 0 {
+			continue
+		}
+
+		entry := entries[0]
+
+		// Determine relative cache path from source plugins dir
+		relCachePath, err := filepath.Rel(sourcePluginsDir, entry.InstallPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  warning: cannot resolve path for %s: %v\n", name, err)
+			continue
+		}
+
+		// Create parent dirs and symlink the version dir
+		tgtCachePath := filepath.Join(tgtPluginsDir, relCachePath)
+		if _, err := os.Lstat(tgtCachePath); err == nil {
+			// Cache already exists (maybe from a previous partial sync)
+			// Just add the manifest entry
+		} else {
+			os.MkdirAll(filepath.Dir(tgtCachePath), 0755)
+			if err := os.Symlink(entry.InstallPath, tgtCachePath); err != nil {
+				fmt.Fprintf(os.Stderr, "  warning: could not symlink plugin %s: %v\n", name, err)
+				continue
+			}
+		}
+
+		// Add to target manifest with rewritten installPath
+		newEntry := entry
+		newEntry.InstallPath = tgtCachePath
+		tgtManifest.Plugins[name] = []pluginEntry{newEntry}
+
+		synced = append(synced, name)
+	}
+
+	if len(synced) == 0 {
+		return nil, nil
+	}
+
+	// Write updated manifest
+	if err := writePluginManifest(tgtManifestPath, tgtManifest); err != nil {
+		return synced, fmt.Errorf("writing plugin manifest: %w", err)
+	}
+
+	// Merge enabledPlugins into target settings.json
+	tgtSettingsPath := filepath.Join(rigDir, "settings.json")
+	tgtSettings, _ := readJSONFile(tgtSettingsPath)
+	if tgtSettings == nil {
+		tgtSettings = make(map[string]any)
+	}
+	tgtEnabled, _ := tgtSettings["enabledPlugins"].(map[string]any)
+	if tgtEnabled == nil {
+		tgtEnabled = make(map[string]any)
+	}
+	for _, name := range synced {
+		if _, exists := tgtEnabled[name]; !exists {
+			if srcEnabled != nil {
+				tgtEnabled[name] = srcEnabled[name]
+			} else {
+				tgtEnabled[name] = true
+			}
+		}
+	}
+	tgtSettings["enabledPlugins"] = tgtEnabled
+	writeJSONFile(tgtSettingsPath, tgtSettings)
+
+	return synced, nil
+}
+
+// cleanupSyncedPlugins removes plugins that were synced from global.
+// Removes cache symlinks, manifest entries, and enabledPlugins entries.
+func cleanupSyncedPlugins(rigDir string, pluginNames []string) {
+	if len(pluginNames) == 0 {
+		return
+	}
+
+	tgtPluginsDir := filepath.Join(rigDir, "plugins")
+	tgtManifestPath := filepath.Join(tgtPluginsDir, "installed_plugins.json")
+
+	manifest, err := readPluginManifest(tgtManifestPath)
+	if err != nil {
+		return
+	}
+
+	for _, name := range pluginNames {
+		entries, ok := manifest.Plugins[name]
+		if !ok {
+			continue
+		}
+
+		// Remove cache symlinks
+		for _, entry := range entries {
+			if info, err := os.Lstat(entry.InstallPath); err == nil {
+				if info.Mode()&os.ModeSymlink != 0 {
+					os.Remove(entry.InstallPath)
+					// Clean up empty parent dirs
+					parent := filepath.Dir(entry.InstallPath)
+					for parent != tgtPluginsDir {
+						if entries, _ := os.ReadDir(parent); len(entries) == 0 {
+							os.Remove(parent)
+							parent = filepath.Dir(parent)
+						} else {
+							break
+						}
+					}
+				}
+			}
+		}
+
+		delete(manifest.Plugins, name)
+	}
+
+	writePluginManifest(tgtManifestPath, manifest)
+
+	// Remove from enabledPlugins in settings.json
+	tgtSettingsPath := filepath.Join(rigDir, "settings.json")
+	tgtSettings, _ := readJSONFile(tgtSettingsPath)
+	if tgtSettings == nil {
+		return
+	}
+	if enabled, ok := tgtSettings["enabledPlugins"].(map[string]any); ok {
+		for _, name := range pluginNames {
+			delete(enabled, name)
+		}
+		tgtSettings["enabledPlugins"] = enabled
+		writeJSONFile(tgtSettingsPath, tgtSettings)
+	}
+}
+
+// syncMCP merges missing MCP servers from source .claude.json into target rig.
+// Returns newly synced server names.
+func syncMCP(rigDir, sourceClaudeJSON string) ([]string, error) {
+	srcData, err := readJSONFile(sourceClaudeJSON)
+	if err != nil {
+		return nil, nil // no source
+	}
+	srcServers, ok := srcData["mcpServers"].(map[string]any)
+	if !ok || len(srcServers) == 0 {
+		return nil, nil
+	}
+
+	tgtClaudeJSON := filepath.Join(rigDir, ".claude.json")
+	tgtData, _ := readJSONFile(tgtClaudeJSON)
+	if tgtData == nil {
+		tgtData = make(map[string]any)
+	}
+	tgtServers, _ := tgtData["mcpServers"].(map[string]any)
+	if tgtServers == nil {
+		tgtServers = make(map[string]any)
+	}
+
+	var synced []string
+	for name, config := range srcServers {
+		if _, exists := tgtServers[name]; exists {
+			continue // local takes precedence
+		}
+		tgtServers[name] = config
+		synced = append(synced, name)
+	}
+
+	if len(synced) == 0 {
+		return nil, nil
+	}
+
+	tgtData["mcpServers"] = tgtServers
+	if err := writeJSONFile(tgtClaudeJSON, tgtData); err != nil {
+		return synced, fmt.Errorf("writing .claude.json: %w", err)
+	}
+
+	return synced, nil
+}
+
+// cleanupSyncedMCP removes MCP servers that were synced from global.
+func cleanupSyncedMCP(rigDir string, serverNames []string) {
+	if len(serverNames) == 0 {
+		return
+	}
+
+	tgtClaudeJSON := filepath.Join(rigDir, ".claude.json")
+	tgtData, err := readJSONFile(tgtClaudeJSON)
+	if err != nil {
+		return
+	}
+	servers, ok := tgtData["mcpServers"].(map[string]any)
+	if !ok {
+		return
+	}
+
+	for _, name := range serverNames {
+		delete(servers, name)
+	}
+
+	tgtData["mcpServers"] = servers
+	writeJSONFile(tgtClaudeJSON, tgtData)
+}
 
 func validateRigName(name string) error {
 	if name == "" {

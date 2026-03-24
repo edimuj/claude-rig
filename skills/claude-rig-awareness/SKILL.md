@@ -41,9 +41,10 @@ Configuration resolves in three layers, most specific wins:
 | Rig     | `~/.claude-rig/rigs/<name>/` (`CLAUDE_CONFIG_DIR`) | Per-rig override       |
 | Project | `.claude/` in the project working dir              | Per-project override   |
 
-Most files in the rig directory are **symlinks** back to `~/.claude/` — they share
-global state. Rig-specific items (settings, plugins, skills, hooks, agents, commands)
-are real files that override the global ones. Rigs can inherit (symlink) some of these from global.
+Rig-specific items (settings, plugins, skills, hooks, agents) are real files that override
+the global ones. New rigs also isolate per-rig data by default (conversations, history,
+sessions, etc.). Remaining shared items are symlinks back to `~/.claude/`. Rigs can
+inherit skills/agents/hooks/commands from global, and sync plugins + MCP servers.
 
 ## Before modifying Claude Code config: ASK the user
 
@@ -90,10 +91,31 @@ meaning they have their own local copy instead of a symlink.
 A `rig.json` file in the rig directory controls this:
 ```json
 {
-  "isolate": ["hooks"],
-  "inherit": ["skills", "commands"]
+  "isolate": ["conversations", "history.jsonl", "sessions", "plugins", ...],
+  "inherit": ["skills", "commands"],
+  "synced_plugins": ["claude-mneme@claude-mneme", ...],
+  "synced_mcp": ["gopls", "codex"]
 }
 ```
 
-When you see a symlink in the rig directory, it's inherited from global. When it's a
-real file, it's rig-local.
+**New rigs isolate 21 items by default** (conversations, history, sessions, channels,
+tasks, todos, backups, shell-snapshots, projects, plans, paste-cache, ide, downloads,
+debug, commands, file-history, session-env, cache, stats-cache.json, statusline, chrome).
+Only `telemetry` and `usage-data` remain shared. Use `--no-isolate-defaults` when creating
+to share everything instead.
+
+When you see a symlink in the rig directory, it's inherited/shared from global. When it's a
+real file, it's rig-local (isolated).
+
+## Plugin and MCP sync
+
+Plugins and MCP servers can be synced across rigs via `claude-rig sync`:
+
+- **Plugins**: cache dirs are symlinked from the source, manifest paths rewritten. Tracked
+  in `rig.json` → `synced_plugins`.
+- **MCP servers**: merged from the source's `.claude.json` into the rig's `.claude.json`.
+  Local entries take precedence. Tracked in `rig.json` → `synced_mcp`.
+
+`claude-rig isolate <rig> plugins` removes synced plugins; `claude-rig share <rig> plugins`
+syncs them back. Same for `mcp`. The `sync` command accepts `--no-plugins`, `--no-mcp`,
+and `--from <rig>` to control behavior.

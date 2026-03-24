@@ -13,7 +13,6 @@ var rigSpecificItems = []string{
 	"skills",
 	"plugins",
 	"agents",
-	"commands",
 	"hooks",
 	"CLAUDE.md",
 }
@@ -96,6 +95,9 @@ var isolatableItems = []string{
 	"plans",
 	"debug",
 	"session-env",
+	"sessions",
+	"channels",
+	"backups",
 	"shell-snapshots",
 	"cache",
 	"stats-cache.json",
@@ -105,6 +107,38 @@ var isolatableItems = []string{
 	"chrome",
 	"downloads",
 	"paste-cache",
+	"ide",
+	"commands",
+	"plugins", // special: sync copies plugin cache + manifest, not file-level symlinks
+	"mcp",     // special: sync merges mcpServers in .claude.json, not file-level
+}
+
+// defaultIsolatedItems are isolated automatically when creating a new rig.
+// These are per-rig data/state items that shouldn't bleed across rigs.
+// Only telemetry and usage-data remain shared (aggregate upstream tracking).
+// Use --no-isolate-defaults to create a rig with everything shared instead.
+var defaultIsolatedItems = []string{
+	"conversations",
+	"history.jsonl",
+	"sessions",
+	"channels",
+	"tasks",
+	"todos",
+	"backups",
+	"shell-snapshots",
+	"projects",
+	"plans",
+	"paste-cache",
+	"ide",
+	"downloads",
+	"debug",
+	"commands",
+	"file-history",
+	"session-env",
+	"cache",
+	"stats-cache.json",
+	"statusline",
+	"chrome",
 }
 
 // inheritableItems are rig-specific directories whose contents can be inherited from ~/.claude/.
