@@ -60,6 +60,7 @@ No interfaces, no packages, no abstractions. Functions call functions.
 | `export`         | `cmdExport`        | tar.gz of rig-specific files; `--include-auth`, `--include-data` |
 | `import`         | `cmdImport`        | Extract archive into new rig; `--link-auth` optional             |
 | `status`         | `cmdStatus`        | Disk, sessions (/proc), last used; overview or single-rig detail |
+| `plugin`         | `cmdPlugin`        | Forwards `claude plugin` to active rig; `--rig` to target other  |
 | `update-plugins` | `cmdUpdatePlugins` | Parallel across rigs, calls `claude plugin` CLI                  |
 | `doctor`         | `cmdDoctor`        | Broken symlinks, inherited items, synced plugins/MCP health      |
 

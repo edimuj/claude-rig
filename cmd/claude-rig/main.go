@@ -93,6 +93,8 @@ func main() {
 		err = cmdExport(args)
 	case "import":
 		err = cmdImport(args)
+	case "plugin":
+		err = cmdPlugin(args)
 	case "doctor":
 		err = cmdDoctor()
 	case "version", "--version", "-v":
@@ -163,6 +165,7 @@ Commands:
   export <rig> [file]     Export rig to .tar.gz (--include-auth, --include-data)
   import <file> <name>    Import rig from archive (--link-auth)
   status [rig]            Show rig status (disk, sessions, last used)
+  plugin <subcommand>     Run claude plugin commands on active rig (--rig <name>)
   update-plugins [rigs]   Update marketplace plugins (all rigs if none given)
   doctor                  Check rigs for broken symlinks and missing items
   init                    Initialize rig system (run once)

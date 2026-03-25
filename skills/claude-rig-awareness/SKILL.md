@@ -46,6 +46,53 @@ the global ones. New rigs also isolate per-rig data by default (conversations, h
 sessions, etc.). Remaining shared items are symlinks back to `~/.claude/`. Rigs can
 inherit skills/agents/hooks/commands from global, and sync plugins + MCP servers.
 
+## Installing plugins, marketplaces, and MCP servers
+
+**CRITICAL: Never run `claude plugin` directly. Always use `claude-rig plugin` instead.**
+
+`claude-rig plugin` forwards all arguments to `claude plugin` but sets `CLAUDE_CONFIG_DIR`
+to the correct rig directory first. Running `claude plugin` directly may install to
+`~/.claude/` instead of the active rig.
+
+```bash
+# Install a plugin to the active rig
+claude-rig plugin add edimuj/claude-mneme
+
+# Add a marketplace
+claude-rig plugin marketplace add github.com/anthropics/claude-plugins-official
+
+# Update marketplaces
+claude-rig plugin marketplace update
+
+# List, remove, update plugins
+claude-rig plugin list
+claude-rig plugin remove claude-mneme@claude-mneme
+claude-rig plugin update claude-mneme@claude-mneme
+
+# Target a different rig
+claude-rig plugin add edimuj/claude-mneme --rig webdev
+```
+
+The `--rig <name>` flag can go anywhere in the args. Without it, the active rig is
+resolved from `CLAUDE_CONFIG_DIR` or the `.claude-rig` RC file.
+
+### MCP servers
+
+MCP servers are added via `claude mcp add` which respects `CLAUDE_CONFIG_DIR` when set.
+Inside a rig session, `claude mcp add` already targets the rig's `.claude.json`.
+Cross-rig MCP sync is handled by `claude-rig sync`.
+
+### Skills, agents, hooks, commands
+
+These are directories in the rig. To add them:
+- **Skills**: create a directory under `$CLAUDE_CONFIG_DIR/skills/<name>/`
+- **Agents**: create a `.md` file under `$CLAUDE_CONFIG_DIR/agents/`
+- **Hooks**: configure in `$CLAUDE_CONFIG_DIR/settings.json`
+- **Commands**: create a `.md` file under `$CLAUDE_CONFIG_DIR/commands/`
+
+To make global items available in a rig, use inheritance:
+`claude-rig inherit skills agents hooks commands <rig>`
+
 ## Before modifying Claude Code config: ASK the user
 
 When a user asks you to install a plugin, change a setting, add a skill, edit CLAUDE.md,
@@ -61,9 +108,11 @@ or modify any Claude Code configuration:
 
 ### Common mistakes to avoid
 
+- **Never run `claude plugin` directly** — always use `claude-rig plugin` to ensure
+  the plugin targets the correct rig
 - **Don't write to `~/.claude/settings.json`** when a rig is active — the rig has its
   own `settings.json` at `$CLAUDE_CONFIG_DIR/settings.json`
-- **Don't install plugins to `~/.claude/plugins/`** — use `$CLAUDE_CONFIG_DIR/plugins/`
+- **Don't install plugins to `~/.claude/plugins/`** — use `claude-rig plugin add`
 - **Don't edit `~/.claude/CLAUDE.md`** for rig-specific changes — edit
   `$CLAUDE_CONFIG_DIR/CLAUDE.md`
 - **Don't look in `~/.claude/` and report "not found"** when the config actually lives

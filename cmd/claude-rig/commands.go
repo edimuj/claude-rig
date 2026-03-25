@@ -2221,6 +2221,95 @@ func cmdUpdatePlugins(args []string) error {
 	return nil
 }
 
+// cmdPlugin forwards `claude plugin` subcommands to the active rig interactively.
+// Rig resolution: --rig flag > CLAUDE_CONFIG_DIR > .claude-rig RC file.
+func cmdPlugin(args []string) error {
+	var rigName string
+	var pluginArgs []string
+
+	// Extract --rig flag
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--rig" {
+			if i+1 >= len(args) {
+				return fmt.Errorf("--rig requires a rig name")
+			}
+			rigName = args[i+1]
+			// Remove --rig and its value from args
+			pluginArgs = append(pluginArgs, args[:i]...)
+			pluginArgs = append(pluginArgs, args[i+2:]...)
+			break
+		}
+	}
+	if rigName == "" {
+		pluginArgs = args
+	}
+
+	// Resolve rig directory
+	var dir string
+	if rigName != "" {
+		d, err := rigDir(rigName)
+		if err != nil {
+			return err
+		}
+		if _, err := os.Stat(d); os.IsNotExist(err) {
+			return fmt.Errorf("rig %q does not exist", rigName)
+		}
+		dir = d
+	} else {
+		// Try CLAUDE_CONFIG_DIR (active rig)
+		if env := os.Getenv("CLAUDE_CONFIG_DIR"); env != "" {
+			root, _ := rigsRoot()
+			if root != "" && strings.HasPrefix(env, root+string(filepath.Separator)) {
+				dir = env
+			}
+		}
+		// Try RC file
+		if dir == "" {
+			rig, _, err := findRC()
+			if err != nil {
+				return err
+			}
+			if rig != "" {
+				d, err := rigDir(rig)
+				if err != nil {
+					return err
+				}
+				dir = d
+				rigName = rig
+			}
+		}
+		if dir == "" {
+			return fmt.Errorf("no active rig — use --rig <name> or set up a .claude-rig file")
+		}
+	}
+
+	if rigName == "" {
+		// Extract name from dir path
+		rigName = filepath.Base(dir)
+	}
+
+	binary := claudeCodeBinary()
+	binPath, err := exec.LookPath(binary)
+	if err != nil {
+		return fmt.Errorf("claude binary not found: %w (set CLAUDE_BINARY to override)", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "rig: %s\n", rigName)
+
+	cmdArgs := append([]string{"plugin"}, pluginArgs...)
+	cmd := exec.Command(binPath, cmdArgs...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+
+	env := os.Environ()
+	env = setEnv(env, "CLAUDE_CONFIG_DIR", dir)
+	env = removeEnv(env, "CLAUDECODE")
+	cmd.Env = env
+
+	return cmd.Run()
+}
+
 // runClaudePlugin runs a `claude plugin` subcommand with CLAUDE_CONFIG_DIR set to the rig directory.
 func runClaudePlugin(claudeBin, rigDir string, pluginArgs ...string) (string, error) {
 	args := append([]string{"plugin"}, pluginArgs...)

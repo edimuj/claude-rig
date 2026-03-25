@@ -261,6 +261,31 @@ claude-rig isolate myrig mcp
 claude-rig share myrig mcp
 ```
 
+### Managing Plugins & Marketplaces
+
+Use `claude-rig plugin` instead of `claude plugin` to ensure plugins are installed to the correct rig. It forwards all arguments to `claude plugin` with the right `CLAUDE_CONFIG_DIR` set.
+
+```bash
+# Add a plugin to the active rig
+claude-rig plugin add edimuj/claude-mneme
+
+# Add a marketplace
+claude-rig plugin marketplace add github.com/anthropics/claude-plugins-official
+
+# Update marketplaces and list plugins
+claude-rig plugin marketplace update
+claude-rig plugin list
+
+# Remove a plugin
+claude-rig plugin remove claude-mneme@claude-mneme
+
+# Target a specific rig instead of the active one
+claude-rig plugin add edimuj/claude-mneme --rig webdev
+claude-rig plugin list --rig minimal
+```
+
+**Why not `claude plugin` directly?** When a rig is active, `CLAUDE_CONFIG_DIR` points Claude at the rig directory. But if you run `claude plugin add` from a fresh shell (without the rig env set), the plugin lands in `~/.claude/` — not your rig. `claude-rig plugin` always resolves the correct rig and sets the environment, so the plugin ends up where you expect.
+
 ## Commands
 
 | Command | Description |
@@ -286,6 +311,7 @@ claude-rig share myrig mcp
 | `export <rig> [file]` | Export rig to `.tar.gz` (`--include-auth`, `--include-data`) |
 | `import <file> <name>` | Import rig from archive (`--link-auth` to link auth after import) |
 | `status [rig]` | Show rig status: disk usage, running sessions, last used |
+| `plugin <subcommand>` | Run `claude plugin` commands on active rig (`--rig <name>` to target another) |
 | `update-plugins [rigs]` | Update marketplace plugins across rigs (all if none specified) |
 | `sync [rig]` | Sync symlinks, inherited items, plugins, MCP (all rigs if none given) |
 | `update` | Update Claude Code (forwards to `claude update`) |
