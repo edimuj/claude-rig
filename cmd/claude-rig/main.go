@@ -159,6 +159,8 @@ Commands:
   isolate <rig> <items>   Isolate items per rig (no sharing via symlinks)
   share <rig> <items>     Reverse isolation (delete local, recreate symlink)
   isolation [rig]         Show isolation status for one or all rigs
+    --details              Show individual entries with source info
+    --skills|--plugins|... Filter to specific categories
   inherit <items> [rig]   Inherit global skills/agents/hooks/commands from ~/.claude/
   uninherit <items> [rig] Stop inheriting (remove global symlinks)
   diff <rig1> <rig2>      Compare two rigs (auth, settings, plugins, MCP, etc.)

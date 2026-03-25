@@ -337,9 +337,25 @@ func cmdIsolation(args []string) error {
 		return err
 	}
 
+	var name string
+	var details bool
+	var filters []string
+	validFilters := map[string]bool{"skills": true, "agents": true, "commands": true, "plugins": true, "mcp": true}
+	for _, a := range args {
+		switch {
+		case a == "--details":
+			details = true
+		case strings.HasPrefix(a, "--") && validFilters[strings.TrimPrefix(a, "--")]:
+			filters = append(filters, strings.TrimPrefix(a, "--"))
+		case !strings.HasPrefix(a, "-") && name == "":
+			name = a
+		}
+	}
+
+	isoOpts := isolationOpts{Details: details, Filters: filters}
+
 	// Single rig
-	if len(args) > 0 {
-		name := args[0]
+	if name != "" {
 		dir, err := rigDir(name)
 		if err != nil {
 			return err
@@ -349,7 +365,7 @@ func cmdIsolation(args []string) error {
 		}
 
 		cfg := loadRigConfig(dir)
-		printIsolationStatus(name, cfg)
+		printIsolationStatus(name, cfg, isoOpts)
 		return nil
 	}
 
@@ -369,47 +385,245 @@ func cmdIsolation(args []string) error {
 		}
 		dir, _ := rigDir(e.Name())
 		cfg := loadRigConfig(dir)
-		printIsolationStatus(e.Name(), cfg)
+		printIsolationStatus(e.Name(), cfg, isoOpts)
 	}
 	return nil
 }
 
-func printIsolationStatus(name string, cfg rigConfig) {
-	dir, _ := rigDir(name)
-	fmt.Printf("%s:\n", name)
-	for _, item := range isolatableItems {
-		switch item {
-		case "plugins":
-			if cfg.isIsolated(item) {
-				fmt.Printf("  %-20s isolated\n", item)
-			} else if len(cfg.SyncedPlugins) > 0 {
-				fmt.Printf("  %-20s shared (%d synced)\n", item, len(cfg.SyncedPlugins))
-			} else {
-				fmt.Printf("  %-20s shared\n", item)
-			}
-		case "mcp":
-			if cfg.isIsolated(item) {
-				fmt.Printf("  %-20s isolated\n", item)
-			} else if len(cfg.SyncedMCP) > 0 {
-				fmt.Printf("  %-20s shared (%d synced)\n", item, len(cfg.SyncedMCP))
-			} else {
-				fmt.Printf("  %-20s shared\n", item)
-			}
-		default:
-			status := "shared"
-			linkPath := filepath.Join(dir, item)
-			if info, err := os.Lstat(linkPath); err == nil {
-				if info.Mode()&os.ModeSymlink == 0 {
-					status = "isolated"
-				}
-			} else {
-				status = "absent"
-			}
-			fmt.Printf("  %-20s %s\n", item, status)
+type isolationOpts struct {
+	Details bool
+	Filters []string // empty = show all
+}
+
+func (o isolationOpts) showCategory(cat string) bool {
+	if len(o.Filters) == 0 {
+		return true
+	}
+	for _, f := range o.Filters {
+		if f == cat {
+			return true
 		}
 	}
-	if len(cfg.Inherit) > 0 {
-		fmt.Printf("  Inheriting: %s\n", strings.Join(cfg.Inherit, ", "))
+	return false
+}
+
+func printIsolationStatus(name string, cfg rigConfig, opts isolationOpts) {
+	dir, _ := rigDir(name)
+	home, _ := globalClaudeHome()
+	showAll := len(opts.Filters) == 0
+
+	fmt.Printf("%s:\n", name)
+
+	// Isolatable items (only when no filter or no content-category filters)
+	if showAll {
+		for _, item := range isolatableItems {
+			switch item {
+			case "plugins":
+				if cfg.isIsolated(item) {
+					fmt.Printf("  %-20s isolated\n", item)
+				} else if len(cfg.SyncedPlugins) > 0 {
+					fmt.Printf("  %-20s shared (%d synced)\n", item, len(cfg.SyncedPlugins))
+				} else {
+					fmt.Printf("  %-20s shared\n", item)
+				}
+			case "mcp":
+				if cfg.isIsolated(item) {
+					fmt.Printf("  %-20s isolated\n", item)
+				} else if len(cfg.SyncedMCP) > 0 {
+					fmt.Printf("  %-20s shared (%d synced)\n", item, len(cfg.SyncedMCP))
+				} else {
+					fmt.Printf("  %-20s shared\n", item)
+				}
+			default:
+				status := "shared"
+				linkPath := filepath.Join(dir, item)
+				if info, err := os.Lstat(linkPath); err == nil {
+					if info.Mode()&os.ModeSymlink == 0 {
+						status = "isolated"
+					}
+				} else {
+					status = "absent"
+				}
+				fmt.Printf("  %-20s %s\n", item, status)
+			}
+		}
+		if len(cfg.Inherit) > 0 {
+			fmt.Printf("  Inheriting: %s\n", strings.Join(cfg.Inherit, ", "))
+		}
+	}
+
+	// Content categories: skills, agents, commands, plugins, mcp
+	type contentCategory struct {
+		name    string
+		dirName string
+	}
+	dirCategories := []contentCategory{
+		{"skills", "skills"},
+		{"agents", "agents"},
+		{"commands", "commands"},
+	}
+
+	for _, cat := range dirCategories {
+		if !opts.showCategory(cat.name) {
+			continue
+		}
+		catDir := filepath.Join(dir, cat.dirName)
+		globalDir := filepath.Join(home, cat.dirName)
+		inherited := cfg.isInherited(cat.name)
+
+		entries, _ := os.ReadDir(catDir)
+		var localNames, inheritedNames []string
+		for _, e := range entries {
+			entryPath := filepath.Join(catDir, e.Name())
+			info, err := os.Lstat(entryPath)
+			if err != nil {
+				continue
+			}
+			if info.Mode()&os.ModeSymlink != 0 && inherited {
+				// Check if target is in global dir
+				target, _ := os.Readlink(entryPath)
+				if strings.HasPrefix(target, globalDir+string(filepath.Separator)) || filepath.Dir(target) == globalDir {
+					inheritedNames = append(inheritedNames, e.Name())
+					continue
+				}
+			}
+			localNames = append(localNames, e.Name())
+		}
+
+		total := len(localNames) + len(inheritedNames)
+		if showAll {
+			// Compact summary line
+			parts := []string{fmt.Sprintf("%d total", total)}
+			if len(localNames) > 0 {
+				parts = append(parts, fmt.Sprintf("%d local", len(localNames)))
+			}
+			if len(inheritedNames) > 0 {
+				parts = append(parts, fmt.Sprintf("%d inherited", len(inheritedNames)))
+			}
+			fmt.Printf("  %-20s %s\n", cat.name, strings.Join(parts, ", "))
+		} else {
+			// Filtered mode — show header
+			fmt.Printf("  %s: %d total (%d local, %d inherited)\n", cat.name, total, len(localNames), len(inheritedNames))
+		}
+
+		if opts.Details {
+			for _, n := range localNames {
+				fmt.Printf("    %-30s local\n", n)
+			}
+			for _, n := range inheritedNames {
+				fmt.Printf("    %-30s inherited (global)\n", n)
+			}
+		}
+	}
+
+	// Plugins
+	if opts.showCategory("plugins") {
+		pluginsDir := filepath.Join(dir, "plugins")
+		manifest, err := readPluginManifest(filepath.Join(pluginsDir, "installed_plugins.json"))
+		syncedSet := make(map[string]bool)
+		for _, s := range cfg.SyncedPlugins {
+			syncedSet[s] = true
+		}
+
+		var localPlugins, syncedPlugins []string
+		if err == nil {
+			for pluginName := range manifest.Plugins {
+				if syncedSet[pluginName] {
+					syncedPlugins = append(syncedPlugins, pluginName)
+				} else {
+					localPlugins = append(localPlugins, pluginName)
+				}
+			}
+		}
+		sort.Strings(localPlugins)
+		sort.Strings(syncedPlugins)
+
+		total := len(localPlugins) + len(syncedPlugins)
+		if showAll {
+			parts := []string{fmt.Sprintf("%d total", total)}
+			if len(localPlugins) > 0 {
+				parts = append(parts, fmt.Sprintf("%d local", len(localPlugins)))
+			}
+			if len(syncedPlugins) > 0 {
+				parts = append(parts, fmt.Sprintf("%d synced", len(syncedPlugins)))
+			}
+			// Don't duplicate with the isolatable item line above — skip if not details
+			if opts.Details {
+				fmt.Printf("  %-20s %s\n", "plugins (detail)", strings.Join(parts, ", "))
+			}
+		} else {
+			fmt.Printf("  plugins: %d total (%d local, %d synced)\n", total, len(localPlugins), len(syncedPlugins))
+		}
+
+		if opts.Details {
+			for _, n := range localPlugins {
+				source := "local"
+				// Check if the cache dir is a symlink (could be synced from another rig)
+				if entries, ok := manifest.Plugins[n]; ok && len(entries) > 0 {
+					if info, err := os.Lstat(entries[0].InstallPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
+						target, _ := os.Readlink(entries[0].InstallPath)
+						source = fmt.Sprintf("local (cache: %s)", filepath.Dir(filepath.Dir(target)))
+					}
+				}
+				fmt.Printf("    %-30s %s\n", n, source)
+			}
+			for _, n := range syncedPlugins {
+				source := "synced"
+				if entries, ok := manifest.Plugins[n]; ok && len(entries) > 0 {
+					if info, err := os.Lstat(entries[0].InstallPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
+						target, _ := os.Readlink(entries[0].InstallPath)
+						source = fmt.Sprintf("synced (from %s)", filepath.Dir(filepath.Dir(target)))
+					}
+				}
+				fmt.Printf("    %-30s %s\n", n, source)
+			}
+		}
+	}
+
+	// MCP servers
+	if opts.showCategory("mcp") {
+		claudeJSON, _ := readJSONFile(filepath.Join(dir, ".claude.json"))
+		mcpServers, _ := claudeJSON["mcpServers"].(map[string]any)
+		syncedSet := make(map[string]bool)
+		for _, s := range cfg.SyncedMCP {
+			syncedSet[s] = true
+		}
+
+		var localMCP, syncedMCP []string
+		for name := range mcpServers {
+			if syncedSet[name] {
+				syncedMCP = append(syncedMCP, name)
+			} else {
+				localMCP = append(localMCP, name)
+			}
+		}
+		sort.Strings(localMCP)
+		sort.Strings(syncedMCP)
+
+		total := len(localMCP) + len(syncedMCP)
+		if showAll {
+			if opts.Details {
+				parts := []string{fmt.Sprintf("%d total", total)}
+				if len(localMCP) > 0 {
+					parts = append(parts, fmt.Sprintf("%d local", len(localMCP)))
+				}
+				if len(syncedMCP) > 0 {
+					parts = append(parts, fmt.Sprintf("%d synced", len(syncedMCP)))
+				}
+				fmt.Printf("  %-20s %s\n", "mcp (detail)", strings.Join(parts, ", "))
+			}
+		} else {
+			fmt.Printf("  mcp: %d total (%d local, %d synced)\n", total, len(localMCP), len(syncedMCP))
+		}
+
+		if opts.Details {
+			for _, n := range localMCP {
+				fmt.Printf("    %-30s local\n", n)
+			}
+			for _, n := range syncedMCP {
+				fmt.Printf("    %-30s synced (global)\n", n)
+			}
+		}
 	}
 }
 
