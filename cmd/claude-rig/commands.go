@@ -1140,36 +1140,59 @@ func cmdDoctor() error {
 			}
 		}
 
-		// Check synced plugins: cache symlinks valid, manifest entries consistent
-		if len(cfg.SyncedPlugins) > 0 {
-			tgtPluginsDir := filepath.Join(dir, "plugins")
-			manifest, err := readPluginManifest(filepath.Join(tgtPluginsDir, "installed_plugins.json"))
+		// Check ALL installed plugins: cache, manifest, and marketplace consistency
+		tgtPluginsDir := filepath.Join(dir, "plugins")
+		manifest, err := readPluginManifest(filepath.Join(tgtPluginsDir, "installed_plugins.json"))
+		if err == nil && len(manifest.Plugins) > 0 {
+			knownMP, _ := readJSONFile(filepath.Join(tgtPluginsDir, "known_marketplaces.json"))
 			brokenPlugins := 0
-			if err != nil {
-				warn("Synced plugins: cannot read manifest")
-			} else {
-				for _, pluginName := range cfg.SyncedPlugins {
-					entries, ok := manifest.Plugins[pluginName]
-					if !ok || len(entries) == 0 {
-						warn("Synced plugin %s: missing from manifest", pluginName)
+
+			for pluginKey, entries := range manifest.Plugins {
+				if len(entries) == 0 {
+					continue
+				}
+
+				// Check cache exists and symlinks resolve
+				installPath := entries[0].InstallPath
+				if info, err := os.Lstat(installPath); err != nil {
+					warn("Plugin %s: cache missing: %s", pluginKey, installPath)
+					brokenPlugins++
+				} else if info.Mode()&os.ModeSymlink != 0 {
+					target, _ := os.Readlink(installPath)
+					if _, err := os.Stat(target); os.IsNotExist(err) {
+						warn("Plugin %s: broken cache symlink → %s", pluginKey, target)
 						brokenPlugins++
-						continue
 					}
-					installPath := entries[0].InstallPath
-					if info, err := os.Lstat(installPath); err != nil {
-						warn("Synced plugin %s: cache missing: %s", pluginName, installPath)
+				}
+
+				// Check marketplace registration
+				if idx := strings.LastIndex(pluginKey, "@"); idx >= 0 {
+					mpName := pluginKey[idx+1:]
+					if knownMP == nil {
+						warn("Plugin %s: no known_marketplaces.json", pluginKey)
 						brokenPlugins++
-					} else if info.Mode()&os.ModeSymlink != 0 {
-						target, _ := os.Readlink(installPath)
-						if _, err := os.Stat(target); os.IsNotExist(err) {
-							warn("Synced plugin %s: broken cache symlink → %s", pluginName, target)
+					} else if _, exists := knownMP[mpName]; !exists {
+						warn("Plugin %s: marketplace %q not in known_marketplaces.json (run: claude-rig sync)", pluginKey, mpName)
+						brokenPlugins++
+					} else {
+						// Check marketplace directory exists
+						mpDir := filepath.Join(tgtPluginsDir, "marketplaces", mpName)
+						if info, err := os.Lstat(mpDir); err != nil {
+							warn("Plugin %s: marketplace dir missing: marketplaces/%s", pluginKey, mpName)
 							brokenPlugins++
+						} else if info.Mode()&os.ModeSymlink != 0 {
+							target, _ := os.Readlink(mpDir)
+							if _, err := os.Stat(target); os.IsNotExist(err) {
+								warn("Plugin %s: broken marketplace symlink → %s", pluginKey, target)
+								brokenPlugins++
+							}
 						}
 					}
 				}
 			}
+
 			if brokenPlugins == 0 {
-				ok("Synced plugins: %d ok", len(cfg.SyncedPlugins))
+				ok("Plugins: %d installed, all healthy", len(manifest.Plugins))
 			}
 		}
 
@@ -2797,14 +2820,15 @@ func syncPlugins(rigDir, sourcePluginsDir string) ([]string, error) {
 	var synced []string
 
 	for name, entries := range srcManifest.Plugins {
-		if _, exists := tgtManifest.Plugins[name]; exists {
-			continue // already in target
-		}
 		if len(entries) == 0 {
 			continue
 		}
 
 		entry := entries[0]
+		alreadyRegistered := false
+		if _, exists := tgtManifest.Plugins[name]; exists {
+			alreadyRegistered = true
+		}
 
 		// Determine relative cache path from source plugins dir
 		relCachePath, err := filepath.Rel(sourcePluginsDir, entry.InstallPath)
@@ -2813,17 +2837,31 @@ func syncPlugins(rigDir, sourcePluginsDir string) ([]string, error) {
 			continue
 		}
 
-		// Create parent dirs and symlink the version dir
+		// Create parent dirs and symlink the version dir.
+		// Also repair broken symlinks for already-registered plugins.
 		tgtCachePath := filepath.Join(tgtPluginsDir, relCachePath)
-		if _, err := os.Lstat(tgtCachePath); err == nil {
-			// Cache already exists (maybe from a previous partial sync)
-			// Just add the manifest entry
+		if info, err := os.Lstat(tgtCachePath); err == nil {
+			// Something exists — check if it's a broken symlink
+			if info.Mode()&os.ModeSymlink != 0 {
+				if _, err := os.Stat(tgtCachePath); err != nil {
+					// Broken symlink — remove and re-create
+					os.Remove(tgtCachePath)
+					os.MkdirAll(filepath.Dir(tgtCachePath), 0755)
+					if err := os.Symlink(entry.InstallPath, tgtCachePath); err != nil {
+						fmt.Fprintf(os.Stderr, "  warning: could not repair symlink for %s: %v\n", name, err)
+					}
+				}
+			}
 		} else {
 			os.MkdirAll(filepath.Dir(tgtCachePath), 0755)
 			if err := os.Symlink(entry.InstallPath, tgtCachePath); err != nil {
 				fmt.Fprintf(os.Stderr, "  warning: could not symlink plugin %s: %v\n", name, err)
 				continue
 			}
+		}
+
+		if alreadyRegistered {
+			continue
 		}
 
 		// Add to target manifest with rewritten installPath
@@ -2833,6 +2871,15 @@ func syncPlugins(rigDir, sourcePluginsDir string) ([]string, error) {
 
 		synced = append(synced, name)
 	}
+
+	// Sync marketplace registrations for all plugins in the target manifest.
+	// This runs even when no new plugins were synced — a previous sync may
+	// have added the plugin cache + manifest but missed the marketplace.
+	allPluginKeys := make([]string, 0, len(tgtManifest.Plugins))
+	for key := range tgtManifest.Plugins {
+		allPluginKeys = append(allPluginKeys, key)
+	}
+	syncMarketplaces(sourcePluginsDir, tgtPluginsDir, allPluginKeys)
 
 	if len(synced) == 0 {
 		return nil, nil
@@ -2866,6 +2913,82 @@ func syncPlugins(rigDir, sourcePluginsDir string) ([]string, error) {
 	writeJSONFile(tgtSettingsPath, tgtSettings)
 
 	return synced, nil
+}
+
+// syncMarketplaces propagates marketplace registrations from source to target
+// for the given synced plugin keys (format: "plugin@marketplace").
+// For each marketplace referenced by a synced plugin, it:
+//  1. Adds the entry to the target's known_marketplaces.json
+//  2. Symlinks the marketplace directory from source to target
+func syncMarketplaces(sourcePluginsDir, tgtPluginsDir string, syncedPluginKeys []string) {
+	// Collect unique marketplace names from plugin keys
+	marketplaces := make(map[string]bool)
+	for _, key := range syncedPluginKeys {
+		if idx := strings.LastIndex(key, "@"); idx >= 0 {
+			marketplaces[key[idx+1:]] = true
+		}
+	}
+	if len(marketplaces) == 0 {
+		return
+	}
+
+	// Read source known_marketplaces.json
+	srcKMPath := filepath.Join(sourcePluginsDir, "known_marketplaces.json")
+	srcKM, err := readJSONFile(srcKMPath)
+	if err != nil || srcKM == nil {
+		return
+	}
+
+	// Read target known_marketplaces.json (or init empty)
+	tgtKMPath := filepath.Join(tgtPluginsDir, "known_marketplaces.json")
+	tgtKM, _ := readJSONFile(tgtKMPath)
+	if tgtKM == nil {
+		tgtKM = make(map[string]any)
+	}
+
+	changed := false
+	for name := range marketplaces {
+		srcEntry, ok := srcKM[name]
+		if !ok {
+			continue
+		}
+		if _, exists := tgtKM[name]; exists {
+			continue // already registered in target
+		}
+
+		// Rewrite installLocation to point to target's marketplaces dir
+		srcEntryMap, ok := srcEntry.(map[string]any)
+		if !ok {
+			continue
+		}
+		tgtEntry := make(map[string]any)
+		for k, v := range srcEntryMap {
+			tgtEntry[k] = v
+		}
+		tgtMPDir := filepath.Join(tgtPluginsDir, "marketplaces", name)
+		tgtEntry["installLocation"] = tgtMPDir
+
+		// Symlink the marketplace directory from source
+		srcMPDir := filepath.Join(sourcePluginsDir, "marketplaces", name)
+		if _, err := os.Stat(srcMPDir); err != nil {
+			continue // source marketplace dir doesn't exist
+		}
+		if _, err := os.Lstat(tgtMPDir); err != nil {
+			// Doesn't exist yet — create symlink
+			os.MkdirAll(filepath.Dir(tgtMPDir), 0755)
+			if err := os.Symlink(srcMPDir, tgtMPDir); err != nil {
+				fmt.Fprintf(os.Stderr, "  warning: could not symlink marketplace %s: %v\n", name, err)
+				continue
+			}
+		}
+
+		tgtKM[name] = tgtEntry
+		changed = true
+	}
+
+	if changed {
+		writeJSONFile(tgtKMPath, tgtKM)
+	}
 }
 
 // cleanupSyncedPlugins removes plugins that were synced from global.
@@ -2925,6 +3048,37 @@ func cleanupSyncedPlugins(rigDir string, pluginNames []string) {
 		}
 		tgtSettings["enabledPlugins"] = enabled
 		writeJSONFile(tgtSettingsPath, tgtSettings)
+	}
+
+	// Clean up marketplace entries and symlinks for removed plugins.
+	// Extract marketplace names from plugin keys (format: "plugin@marketplace").
+	removedMarketplaces := make(map[string]bool)
+	for _, name := range pluginNames {
+		if idx := strings.LastIndex(name, "@"); idx >= 0 {
+			removedMarketplaces[name[idx+1:]] = true
+		}
+	}
+
+	// Only remove a marketplace if no other plugins in the manifest use it
+	for key := range manifest.Plugins {
+		if idx := strings.LastIndex(key, "@"); idx >= 0 {
+			delete(removedMarketplaces, key[idx+1:])
+		}
+	}
+
+	if len(removedMarketplaces) > 0 {
+		tgtKMPath := filepath.Join(tgtPluginsDir, "known_marketplaces.json")
+		if tgtKM, err := readJSONFile(tgtKMPath); err == nil && tgtKM != nil {
+			for mp := range removedMarketplaces {
+				delete(tgtKM, mp)
+				// Remove marketplace symlink
+				mpDir := filepath.Join(tgtPluginsDir, "marketplaces", mp)
+				if info, err := os.Lstat(mpDir); err == nil && info.Mode()&os.ModeSymlink != 0 {
+					os.Remove(mpDir)
+				}
+			}
+			writeJSONFile(tgtKMPath, tgtKM)
+		}
 	}
 }
 
