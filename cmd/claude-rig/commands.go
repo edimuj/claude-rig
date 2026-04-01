@@ -18,10 +18,11 @@ import (
 
 // rigConfig holds per-rig configuration stored in rig.json.
 type rigConfig struct {
-	Isolate       []string `json:"isolate,omitempty"`
-	Inherit       []string `json:"inherit,omitempty"`
-	SyncedPlugins []string `json:"synced_plugins,omitempty"`
-	SyncedMCP     []string `json:"synced_mcp,omitempty"`
+	Isolate       []string          `json:"isolate,omitempty"`
+	Inherit       []string          `json:"inherit,omitempty"`
+	SyncedPlugins []string          `json:"synced_plugins,omitempty"`
+	SyncedMCP     []string          `json:"synced_mcp,omitempty"`
+	PluginMCP     map[string]string `json:"plugin_mcp,omitempty"` // MCP server name → plugin key
 }
 
 // pluginManifest represents installed_plugins.json.
@@ -2436,6 +2437,11 @@ func cmdUpdatePlugins(args []string) error {
 				fmt.Fprintf(&buf, "  Cleaned %d stale orphan markers\n", cleaned)
 			}
 
+			// Reconcile plugin MCP servers in .mcp.json
+			if err := syncPluginMCP(dir); err != nil {
+				fmt.Fprintf(&buf, "  Warning: could not sync plugin MCP servers: %v\n", err)
+			}
+
 			results[idx] = rigResult{rigName, buf.String(), failed}
 		}(i, name)
 	}
@@ -2544,7 +2550,21 @@ func cmdPlugin(args []string) error {
 	env = removeEnv(env, "CLAUDECODE")
 	cmd.Env = env
 
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+
+	// After install/uninstall/update, sync plugin MCP servers to .mcp.json
+	if len(pluginArgs) > 0 {
+		switch pluginArgs[0] {
+		case "install", "uninstall", "update":
+			if err := syncPluginMCP(dir); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not sync plugin MCP servers: %v\n", err)
+			}
+		}
+	}
+
+	return nil
 }
 
 // runClaudePlugin runs a `claude plugin` subcommand with CLAUDE_CONFIG_DIR set to the rig directory.
@@ -2881,6 +2901,10 @@ func syncPlugins(rigDir, sourcePluginsDir string) ([]string, error) {
 	}
 	syncMarketplaces(sourcePluginsDir, tgtPluginsDir, allPluginKeys)
 
+	// Always reconcile plugin MCP servers, even when no new plugins were synced.
+	// A previous sync may have added the plugin but missed MCP extraction.
+	syncPluginMCP(rigDir)
+
 	if len(synced) == 0 {
 		return nil, nil
 	}
@@ -2913,6 +2937,91 @@ func syncPlugins(rigDir, sourcePluginsDir string) ([]string, error) {
 	writeJSONFile(tgtSettingsPath, tgtSettings)
 
 	return synced, nil
+}
+
+// syncPluginMCP reads mcpServers from all installed plugins' plugin.json and
+// merges them into the rig's .mcp.json. It tracks which MCP servers came from
+// plugins in rig.json's plugin_mcp map so uninstalls can clean up correctly.
+func syncPluginMCP(rigDir string) error {
+	manifestPath := filepath.Join(rigDir, "plugins", "installed_plugins.json")
+	manifest, err := readPluginManifest(manifestPath)
+	if err != nil {
+		return nil // no installed plugins
+	}
+
+	cfg := loadRigConfig(rigDir)
+
+	// Collect all MCP servers from installed plugins' plugin.json
+	wantMCP := make(map[string]any)       // server name → config
+	wantTrack := make(map[string]string)   // server name → plugin key
+	for pluginKey, entries := range manifest.Plugins {
+		if len(entries) == 0 {
+			continue
+		}
+		pluginJSONPath := filepath.Join(entries[0].InstallPath, ".claude-plugin", "plugin.json")
+		pdata, err := readJSONFile(pluginJSONPath)
+		if err != nil {
+			continue
+		}
+		servers, ok := pdata["mcpServers"].(map[string]any)
+		if !ok {
+			continue
+		}
+		for name, config := range servers {
+			wantMCP[name] = config
+			wantTrack[name] = pluginKey
+		}
+	}
+
+	// Read current .mcp.json
+	mcpJSONPath := filepath.Join(rigDir, ".mcp.json")
+	mcpData, _ := readJSONFile(mcpJSONPath)
+	if mcpData == nil {
+		mcpData = map[string]any{"mcpServers": map[string]any{}}
+	}
+	servers, _ := mcpData["mcpServers"].(map[string]any)
+	if servers == nil {
+		servers = make(map[string]any)
+	}
+
+	oldTrack := cfg.PluginMCP
+	if oldTrack == nil {
+		oldTrack = make(map[string]string)
+	}
+
+	changed := false
+
+	// Remove MCP servers from plugins that are no longer installed
+	for name := range oldTrack {
+		if _, stillWanted := wantTrack[name]; !stillWanted {
+			delete(servers, name)
+			changed = true
+		}
+	}
+
+	// Add/update MCP servers from installed plugins
+	for name, config := range wantMCP {
+		if _, exists := servers[name]; !exists {
+			servers[name] = config
+			changed = true
+		}
+	}
+
+	if !changed && len(wantTrack) == len(oldTrack) {
+		return nil
+	}
+
+	// Write .mcp.json
+	mcpData["mcpServers"] = servers
+	if err := writeJSONFile(mcpJSONPath, mcpData); err != nil {
+		return fmt.Errorf("writing .mcp.json: %w", err)
+	}
+
+	// Update tracking in rig.json
+	cfg.PluginMCP = wantTrack
+	saveRigConfig(rigDir, cfg)
+
+	return nil
 }
 
 // syncMarketplaces propagates marketplace registrations from source to target
