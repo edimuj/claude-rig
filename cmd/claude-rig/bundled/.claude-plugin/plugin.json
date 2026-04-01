@@ -1,0 +1,5 @@
+{
+  "name": "claude-rig",
+  "description": "Bundled skills and agents for claude-rig — multi-rig management for Claude Code",
+  "version": "0.0.0"
+}

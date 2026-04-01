@@ -1,11 +1,15 @@
 package main
 
 import (
+	"embed"
 	"fmt"
 	"os"
 	"runtime/debug"
 	"strings"
 )
+
+//go:embed all:bundled
+var bundledPlugin embed.FS
 
 // version is set at build time via -ldflags "-X main.version=..."
 // Falls back to Go module version info when installed via `go install`.

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -74,6 +75,58 @@ func (c rigConfig) isInherited(name string) bool {
 		}
 	}
 	return false
+}
+
+// extractBundledPlugin writes the embedded plugin to ~/.claude-rig/bundled-plugin/
+// if the version marker doesn't match the current binary version.
+// Returns the path to the extracted plugin directory.
+func extractBundledPlugin() (string, error) {
+	home, err := rigHome()
+	if err != nil {
+		return "", err
+	}
+	pluginDir := filepath.Join(home, "bundled-plugin")
+	versionFile := filepath.Join(pluginDir, ".version")
+
+	// Skip extraction if version matches
+	if data, err := os.ReadFile(versionFile); err == nil {
+		if strings.TrimSpace(string(data)) == getVersion() {
+			return pluginDir, nil
+		}
+	}
+
+	// Clean and re-extract
+	os.RemoveAll(pluginDir)
+
+	err = fs.WalkDir(bundledPlugin, "bundled", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		// Strip the "bundled" prefix to get the relative path
+		rel, _ := filepath.Rel("bundled", path)
+		target := filepath.Join(pluginDir, rel)
+
+		if d.IsDir() {
+			return os.MkdirAll(target, 0755)
+		}
+		data, err := bundledPlugin.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		// Stamp plugin.json with the current binary version
+		if filepath.Base(path) == "plugin.json" {
+			data = []byte(strings.ReplaceAll(string(data), `"0.0.0"`, `"`+getVersion()+`"`))
+		}
+		return os.WriteFile(target, data, 0644)
+	})
+	if err != nil {
+		return "", fmt.Errorf("extracting bundled plugin: %w", err)
+	}
+
+	// Write version marker
+	os.WriteFile(versionFile, []byte(getVersion()+"\n"), 0644)
+
+	return pluginDir, nil
 }
 
 // applyIsolation saves isolation config and creates local files/dirs for isolated items.
@@ -2220,6 +2273,13 @@ func cmdLaunch(args []string) error {
 		canonicalClaudeHome := filepath.Join(userHome, ".claude")
 		env = setEnv(env, "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD", "1")
 		extraArgs = append(extraArgs, "--add-dir", canonicalClaudeHome)
+	}
+
+	// Extract and load bundled plugin (skills/agents shipped with claude-rig)
+	if pluginDir, err := extractBundledPlugin(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not extract bundled plugin: %v\n", err)
+	} else {
+		extraArgs = append(extraArgs, "--plugin-dir", pluginDir)
 	}
 
 	execArgs := append([]string{binary}, defaultArgs...)

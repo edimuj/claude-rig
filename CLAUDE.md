@@ -33,6 +33,10 @@ No interfaces, no packages, no abstractions. Functions call functions.
 - `applyIsolation` helper shared by `cmdCreate` and `cloneFromDefault` for default isolation
 - Inheritance = 3-layer: global (`~/.claude/`) → rig → project (`.claude/`). Rig-local files override inherited symlinks
 - Version injected via ldflags from git tags
+- Bundled plugin (`cmd/claude-rig/bundled/`) embedded in binary via `go:embed`, extracted
+  to `~/.claude-rig/bundled-plugin/` on launch, loaded via `--plugin-dir`. Version-stamped
+  — only re-extracts when binary version changes. Skills/agents shipped with claude-rig
+  go here
 
 ## Command → Function Map
 
