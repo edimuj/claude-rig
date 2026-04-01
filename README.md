@@ -66,12 +66,17 @@ brew install edimuj/tap/claude-rig
 curl -sSL https://raw.githubusercontent.com/edimuj/claude-rig/main/install.sh | sh
 ```
 
+**PowerShell** (Windows):
+```powershell
+irm https://raw.githubusercontent.com/edimuj/claude-rig/main/install.ps1 | iex
+```
+
 **Go install** (requires Go):
 ```bash
 go install github.com/edimuj/claude-rig/cmd/claude-rig@latest
 ```
 
-**Download binary**: grab the latest release from [GitHub Releases](https://github.com/edimuj/claude-rig/releases).
+**Download binary**: grab the latest release from [GitHub Releases](https://github.com/edimuj/claude-rig/releases) (macOS, Linux, Windows).
 
 **Build from source**:
 ```bash

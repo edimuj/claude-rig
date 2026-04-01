@@ -24,7 +24,8 @@ No interfaces, no packages, no abstractions. Functions call functions.
 - `CLAUDE_CONFIG_DIR` env var points Claude Code at the rig directory
 - `launch` uses `syscall.Exec` (replaces process, not subprocess)
 - `rig.json` in rig dir controls isolation (`{"isolate": [...]}`), inheritance (`{"inherit": [...]}`),
-  and sync tracking (`{"synced_plugins": [...], "synced_mcp": [...]}`)
+  sync tracking (`{"synced_plugins": [...], "synced_mcp": [...]}`), and plugin MCP provenance (`{"plugin_mcp": {"server": "plugin@market"}}`)
+- `syncPluginMCP` extracts `mcpServers` from installed plugins' `plugin.json` into the rig's `.mcp.json`
 - `syncSharedSymlinks` skips items in rig.json isolate list
 - `syncGlobalContents` symlinks entries from `~/.claude/{skills,agents,hooks,commands}/` into rig for inherited items
 - `syncPlugins` copies plugins from global/source rig (symlinks cache dirs, rewrites manifest paths)
@@ -82,6 +83,19 @@ make run ARGS="version"   # run without installing
 ```bash
 go test ./...             # unit + integration tests
 ```
+
+## Release
+
+Tag push triggers GoReleaser via GitHub Actions (`.github/workflows/release.yml`).
+Builds 5 binaries (linux/darwin × amd64/arm64, windows/amd64), publishes GitHub Release,
+and pushes Homebrew formula to `edimuj/homebrew-tap`.
+
+```bash
+git tag v0.X.Y
+git push origin v0.X.Y
+```
+
+Requires `HOMEBREW_TAP_TOKEN` secret on the repo (fine-grained PAT with Contents:write on homebrew-tap).
 
 ## Constraints
 
