@@ -1,0 +1,73 @@
+project_name: claude-rig
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - main: ./cmd/claude-rig
+    binary: claude-rig
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        format: zip
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+brews:
+  - repository:
+      owner: edimuj
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: https://github.com/edimuj/claude-rig
+    description: Run multiple Claude Code configurations side by side
+    license: MIT
+    install: |
+      bin.install "claude-rig"
+    test: |
+      system "#{bin}/claude-rig", "version"
+
+release:
+  github:
+    owner: edimuj
+    name: claude-rig
+  header: |
+    ## Install
+
+    ```bash
+    # macOS / Linux
+    brew install edimuj/tap/claude-rig
+
+    # Or download the binary
+    curl -sSL https://raw.githubusercontent.com/edimuj/claude-rig/main/install.sh | sh
+
+    # Or with Go
+    go install github.com/edimuj/claude-rig/cmd/claude-rig@latest
+    ```

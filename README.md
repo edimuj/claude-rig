@@ -56,12 +56,24 @@ Most tools in this space swap credential files between accounts. claude-rig isol
 
 ## Install
 
+**Homebrew** (macOS / Linux):
+```bash
+brew install edimuj/tap/claude-rig
+```
+
+**Shell script** (macOS / Linux — detects OS and architecture):
+```bash
+curl -sSL https://raw.githubusercontent.com/edimuj/claude-rig/main/install.sh | sh
+```
+
+**Go install** (requires Go):
 ```bash
 go install github.com/edimuj/claude-rig/cmd/claude-rig@latest
 ```
 
-Or build from source:
+**Download binary**: grab the latest release from [GitHub Releases](https://github.com/edimuj/claude-rig/releases).
 
+**Build from source**:
 ```bash
 git clone https://github.com/edimuj/claude-rig.git
 cd claude-rig
