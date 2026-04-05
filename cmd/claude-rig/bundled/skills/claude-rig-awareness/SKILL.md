@@ -3,10 +3,13 @@ name: claude-rig-awareness
 description: >
   Understanding claude-rig — a tool that manages multiple Claude Code configurations
   ("rigs") in parallel. MUST be consulted before modifying any Claude Code configuration:
-  installing/removing plugins, editing settings.json, editing CLAUDE.md, adding skills,
-  hooks, agents, or commands. Also trigger when the user mentions "rig", "claude-rig",
-  or asks about config layers, or when you're about to write to ~/.claude/ or
-  settings.json. Without this skill, you will likely modify the wrong location.
+  installing/removing plugins, adding/configuring MCP servers, editing settings.json,
+  editing .claude.json, editing CLAUDE.md, adding skills, hooks, agents, or commands.
+  Also trigger when the user mentions "rig", "claude-rig", or asks about config layers,
+  or when the user mentions "plugins", "MCP", "skills", "hooks", "agents", or
+  "commands" in a configuration context, or when you're about to write to ~/.claude/,
+  settings.json, .claude.json, or any config file inside a rig directory. Without this
+  skill, you will likely modify the wrong location or put config in the wrong file.
 ---
 
 # claude-rig Awareness
@@ -378,3 +381,7 @@ or modify any Claude Code configuration:
   in the rig directory
 - **Don't run `claude mcp add` from a shell without the rig env** — inside a rig
   session it's fine, but from a plain shell it targets `~/.claude.json`
+- **Never put MCP servers in `.mcp.json` or `settings.json`** — Claude Code reads
+  MCP config from `.claude.json` only. The correct location for a rig is
+  `$CLAUDE_CONFIG_DIR/.claude.json` under the `"mcpServers"` key. A `.mcp.json`
+  file in the rig dir is ignored, and `settings.json` is for settings, not servers
