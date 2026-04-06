@@ -101,6 +101,12 @@ func main() {
 		err = cmdPlugin(args)
 	case "doctor":
 		err = cmdDoctor()
+	case "versions":
+		err = cmdVersions()
+	case "pin":
+		err = cmdPin(args)
+	case "unpin":
+		err = cmdUnpin(args)
 	case "version", "--version", "-v":
 		fmt.Printf("claude-rig %s\n", getVersion())
 	case "help", "--help", "-h":
@@ -156,6 +162,9 @@ Commands:
     --no-inherit           Skip inherited items sync
     --from <rig>           Use another rig as plugin/MCP source instead of global
   update                  Update Claude Code (forwards to claude update)
+  versions                List available Claude Code versions on disk
+  pin <version>           Pin rig to a specific Claude Code version (--rig <name>)
+  unpin                   Remove version pin, use system default (--rig <name>)
   launch [name] [args]    Launch Claude Code with a specific rig
   rc [name]               Show or set .claude-rig file for current directory
   set-args [name] <args>  Set default launch args (global if no name, per-rig if given)

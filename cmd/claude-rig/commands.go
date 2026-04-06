@@ -23,7 +23,8 @@ type rigConfig struct {
 	Inherit       []string          `json:"inherit,omitempty"`
 	SyncedPlugins []string          `json:"synced_plugins,omitempty"`
 	SyncedMCP     []string          `json:"synced_mcp,omitempty"`
-	PluginMCP     map[string]string `json:"plugin_mcp,omitempty"` // MCP server name → plugin key
+	PluginMCP     map[string]string `json:"plugin_mcp,omitempty"`     // MCP server name → plugin key
+	ClaudeVersion string            `json:"claude_version,omitempty"` // pinned Claude Code binary version
 }
 
 // pluginManifest represents installed_plugins.json.
@@ -1906,12 +1907,16 @@ func cmdList() error {
 		skills := countDirEntries(filepath.Join(dir, "skills"))
 		plugins := countDirEntries(filepath.Join(dir, "plugins"))
 		mcp := countMCPServers(filepath.Join(dir, ".claude.json"))
-		isolated := len(loadRigConfig(dir).Isolate)
+		cfg := loadRigConfig(dir)
+		isolated := len(cfg.Isolate)
 
 		info := fmt.Sprintf("auth: %-20s skills: %d  plugins: %d  mcp: %d",
 			auth, skills, plugins, mcp)
 		if isolated > 0 {
 			info += fmt.Sprintf("  isolated: %d", isolated)
+		}
+		if cfg.ClaudeVersion != "" {
+			info += fmt.Sprintf("  claude: %s (pinned)", cfg.ClaudeVersion)
 		}
 		fmt.Printf("%s%-20s %s\n", marker, name, info)
 	}
@@ -2182,7 +2187,7 @@ func appendUnique(slice []string, items ...string) []string {
 	return slice
 }
 
-// cmdUpdate forwards to `claude update`.
+// cmdUpdate forwards to `claude update`, then warns about pinned rigs.
 func cmdUpdate(args []string) error {
 	binary := claudeCodeBinary()
 	binPath, err := exec.LookPath(binary)
@@ -2194,7 +2199,31 @@ func cmdUpdate(args []string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+
+	// Warn about pinned rigs
+	root, _ := rigsRoot()
+	if root != "" {
+		if entries, err := os.ReadDir(root); err == nil {
+			var pinned []string
+			for _, e := range entries {
+				if !e.IsDir() {
+					continue
+				}
+				cfg := loadRigConfig(filepath.Join(root, e.Name()))
+				if cfg.ClaudeVersion != "" {
+					pinned = append(pinned, fmt.Sprintf("%s (%s)", e.Name(), cfg.ClaudeVersion))
+				}
+			}
+			if len(pinned) > 0 {
+				fmt.Fprintf(os.Stderr, "\nNote: %d rig(s) pinned to older versions: %s\n", len(pinned), strings.Join(pinned, ", "))
+				fmt.Fprintln(os.Stderr, "Use 'claude-rig versions' to see details or 'claude-rig unpin --rig <name>' to follow latest")
+			}
+		}
+	}
+	return nil
 }
 
 // cmdLaunch starts Claude Code with the specified rig's config dir.
@@ -2242,10 +2271,32 @@ func cmdLaunch(args []string) error {
 		fmt.Fprintf(os.Stderr, "Warning: could not sync inherited contents: %v\n", err)
 	}
 
+	// Resolve binary: use pinned version if set, otherwise system default
+	rigCfg := loadRigConfig(dir)
 	binary := claudeCodeBinary()
-	binPath, err := exec.LookPath(binary)
-	if err != nil {
-		return fmt.Errorf("claude binary not found: %w (set CLAUDE_BINARY to override)", err)
+	var binPath string
+	if rigCfg.ClaudeVersion != "" {
+		vDir := claudeVersionsDir()
+		pinnedPath := ""
+		if vDir != "" {
+			pinnedPath = filepath.Join(vDir, rigCfg.ClaudeVersion)
+		}
+		if pinnedPath != "" {
+			if _, err := os.Stat(pinnedPath); err == nil {
+				binPath = pinnedPath
+				fmt.Fprintf(os.Stderr, "Using pinned Claude %s\n", rigCfg.ClaudeVersion)
+			}
+		}
+		if binPath == "" {
+			fmt.Fprintf(os.Stderr, "Warning: pinned version %s not found, falling back to system default\n", rigCfg.ClaudeVersion)
+		}
+	}
+	if binPath == "" {
+		var err error
+		binPath, err = exec.LookPath(binary)
+		if err != nil {
+			return fmt.Errorf("claude binary not found: %w (set CLAUDE_BINARY to override)", err)
+		}
 	}
 
 	// Load default args: per-rig takes precedence, then global
@@ -4115,4 +4166,223 @@ func setDiff(a, b []string) (onlyA, onlyB []string) {
 		}
 	}
 	return
+}
+
+func cmdVersions() error {
+	vDir := claudeVersionsDir()
+	if vDir == "" {
+		return fmt.Errorf("could not discover Claude Code versions directory (binary is not a symlink)")
+	}
+
+	entries, err := os.ReadDir(vDir)
+	if err != nil {
+		return fmt.Errorf("reading versions directory: %w", err)
+	}
+
+	current := claudeCurrentVersion()
+
+	// Collect rig → pinned version for annotation
+	root, _ := rigsRoot()
+	pinnedRigs := map[string][]string{} // version → rig names
+	if root != "" {
+		if rigEntries, err := os.ReadDir(root); err == nil {
+			for _, e := range rigEntries {
+				if !e.IsDir() {
+					continue
+				}
+				dir := filepath.Join(root, e.Name())
+				cfg := loadRigConfig(dir)
+				if cfg.ClaudeVersion != "" {
+					pinnedRigs[cfg.ClaudeVersion] = append(pinnedRigs[cfg.ClaudeVersion], e.Name())
+				}
+			}
+		}
+	}
+
+	// Collect and sort versions
+	var versions []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		versions = append(versions, e.Name())
+	}
+	sort.Strings(versions)
+
+	for _, v := range versions {
+		marker := "  "
+		if v == current {
+			marker = "* "
+		}
+		line := fmt.Sprintf("%s%s", marker, v)
+		if v == current {
+			line += "  (current)"
+		}
+		if rigs, ok := pinnedRigs[v]; ok {
+			line += fmt.Sprintf("  [pinned: %s]", strings.Join(rigs, ", "))
+		}
+		fmt.Println(line)
+	}
+
+	if len(versions) == 0 {
+		fmt.Printf("No version binaries found in %s\n", vDir)
+	}
+	return nil
+}
+
+// resolveActiveRig resolves the active rig from --rig flag, CLAUDE_CONFIG_DIR, or .claude-rig file.
+// Returns (rig name, rig dir, error).
+func resolveActiveRig(args []string) (string, string, error) {
+	var rigName string
+	// Extract --rig flag
+	for i, arg := range args {
+		if arg == "--rig" {
+			if i+1 >= len(args) {
+				return "", "", fmt.Errorf("--rig requires a rig name")
+			}
+			rigName = args[i+1]
+			break
+		}
+	}
+
+	if rigName != "" {
+		dir, err := rigDir(rigName)
+		if err != nil {
+			return "", "", err
+		}
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			return "", "", fmt.Errorf("rig %q does not exist", rigName)
+		}
+		return rigName, dir, nil
+	}
+
+	// Try CLAUDE_CONFIG_DIR
+	if env := os.Getenv("CLAUDE_CONFIG_DIR"); env != "" {
+		root, _ := rigsRoot()
+		if root != "" && strings.HasPrefix(env, root+string(filepath.Separator)) {
+			name := filepath.Base(env)
+			return name, env, nil
+		}
+	}
+
+	// Try RC file
+	rig, _, err := findRC()
+	if err != nil {
+		return "", "", err
+	}
+	if rig != "" {
+		dir, err := rigDir(rig)
+		if err != nil {
+			return "", "", err
+		}
+		return rig, dir, nil
+	}
+
+	return "", "", fmt.Errorf("no active rig — use --rig <name> or set up a .claude-rig file")
+}
+
+func cmdPin(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: claude-rig pin <version> [--rig <name>]")
+	}
+
+	targetVersion := args[0]
+	if targetVersion == "--rig" {
+		return fmt.Errorf("usage: claude-rig pin <version> [--rig <name>]")
+	}
+
+	vDir := claudeVersionsDir()
+	if vDir == "" {
+		return fmt.Errorf("could not discover Claude Code versions directory (binary is not a symlink)")
+	}
+
+	// Validate version exists
+	binPath := filepath.Join(vDir, targetVersion)
+	if _, err := os.Stat(binPath); os.IsNotExist(err) {
+		// List available versions for the error message
+		entries, _ := os.ReadDir(vDir)
+		var available []string
+		for _, e := range entries {
+			if !e.IsDir() {
+				available = append(available, e.Name())
+			}
+		}
+		return fmt.Errorf("version %q not found in %s\nAvailable: %s", targetVersion, vDir, strings.Join(available, ", "))
+	}
+
+	rigName, dir, err := resolveActiveRig(args[1:])
+	if err != nil {
+		return err
+	}
+
+	// Save to rig.json
+	cfg := loadRigConfig(dir)
+	cfg.ClaudeVersion = targetVersion
+	if err := saveRigConfig(dir, cfg); err != nil {
+		return fmt.Errorf("saving rig config: %w", err)
+	}
+
+	// Disable auto-updater in .claude.json
+	if err := setClaudeJSONFields(dir, map[string]any{
+		"autoUpdates":                   false,
+		"autoUpdatesProtectedForNative": false,
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not disable auto-updater: %v\n", err)
+	}
+
+	fmt.Printf("Pinned rig %q to Claude %s\n", rigName, targetVersion)
+	fmt.Println("Auto-updater disabled for this rig")
+	return nil
+}
+
+func cmdUnpin(args []string) error {
+	rigName, dir, err := resolveActiveRig(args)
+	if err != nil {
+		return err
+	}
+
+	cfg := loadRigConfig(dir)
+	if cfg.ClaudeVersion == "" {
+		fmt.Printf("Rig %q is not pinned to any version\n", rigName)
+		return nil
+	}
+
+	oldVersion := cfg.ClaudeVersion
+	cfg.ClaudeVersion = ""
+	if err := saveRigConfig(dir, cfg); err != nil {
+		return fmt.Errorf("saving rig config: %w", err)
+	}
+
+	// Re-enable auto-updater in .claude.json
+	if err := setClaudeJSONFields(dir, map[string]any{
+		"autoUpdates":                   true,
+		"autoUpdatesProtectedForNative": true,
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not re-enable auto-updater: %v\n", err)
+	}
+
+	fmt.Printf("Unpinned rig %q (was %s) — will use system default\n", rigName, oldVersion)
+	fmt.Println("Auto-updater re-enabled for this rig")
+	return nil
+}
+
+// setClaudeJSONFields reads the rig's .claude.json, sets the given top-level fields, and writes it back.
+func setClaudeJSONFields(dir string, fields map[string]any) error {
+	path := filepath.Join(dir, ".claude.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return err
+	}
+	for k, v := range fields {
+		obj[k] = v
+	}
+	out, err := json.MarshalIndent(obj, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(out, '\n'), 0600)
 }

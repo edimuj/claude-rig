@@ -48,9 +48,12 @@ No interfaces, no packages, no abstractions. Functions call functions.
 | `delete`         | `cmdDelete`        | Refuses to delete active rig                                     |
 | `rename`         | `cmdRename`        | Renames rig dir, warns about .claude-rig files                   |
 | `sync`           | `cmdSync`          | Symlinks + inherited + plugins + MCP; `--no-plugins/--no-mcp/--from` |
-| `update`         | `cmdUpdate`        | Forwards to `claude update`                                      |
-| `list`           | `cmdList`          | `*` for running sessions, auth, skills, plugins, MCP counts      |
-| `launch`         | `cmdLaunch`        | Resolves `.claude-rig` file, sets env, `syscall.Exec`            |
+| `update`         | `cmdUpdate`        | Forwards to `claude update`; warns about pinned rigs             |
+| `versions`       | `cmdVersions`      | Lists version binaries on disk, marks current + pinned rigs      |
+| `pin`            | `cmdPin`           | Pin rig to Claude version; disables auto-updater (`--rig`)       |
+| `unpin`          | `cmdUnpin`         | Remove version pin; re-enables auto-updater (`--rig`)            |
+| `list`           | `cmdList`          | `*` for running sessions, auth, skills, plugins, MCP, pinned ver |
+| `launch`         | `cmdLaunch`        | Resolves `.claude-rig` file, sets env, `syscall.Exec`; respects pin |
 | `rc`             | `cmdRC`            | Creates/reads `.claude-rig` project file, walks up dirs          |
 | `link-auth`      | `cmdLinkAuth`      | Symlinks auth files, `--from` for cross-rig                      |
 | `unlink-auth`    | `cmdUnlinkAuth`    | Copies auth files back to break sharing                          |

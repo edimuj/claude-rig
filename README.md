@@ -303,6 +303,27 @@ claude-rig plugin list --rig minimal
 
 **Why not `claude plugin` directly?** When a rig is active, `CLAUDE_CONFIG_DIR` points Claude at the rig directory. But if you run `claude plugin add` from a fresh shell (without the rig env set), the plugin lands in `~/.claude/` — not your rig. `claude-rig plugin` always resolves the correct rig and sets the environment, so the plugin ends up where you expect.
 
+### Version Pinning
+
+Pin individual rigs to specific Claude Code versions — useful for testing new releases safely or reproducing bugs on older versions.
+
+```bash
+# See what versions are available on disk
+claude-rig versions
+
+# Pin a rig to a specific version
+claude-rig pin 2.1.85
+claude-rig pin 2.1.85 --rig staging
+
+# Remove the pin (rig uses system default again)
+claude-rig unpin
+claude-rig unpin --rig staging
+```
+
+When a rig is pinned, `launch` uses that exact binary instead of the system default. The auto-updater is also disabled for pinned rigs so a running session won't silently upgrade itself.
+
+`claude-rig update` still works normally — it updates the system default. Pinned rigs are not affected, and you'll see a reminder about them after each update.
+
 ## Commands
 
 | Command | Description |
@@ -331,7 +352,10 @@ claude-rig plugin list --rig minimal
 | `plugin <subcommand>` | Run `claude plugin` commands on active rig (`--rig <name>` to target another) |
 | `update-plugins [rigs]` | Update marketplace plugins across rigs (all if none specified) |
 | `sync [rig]` | Sync symlinks, inherited items, plugins, MCP (all rigs if none given) |
-| `update` | Update Claude Code (forwards to `claude update`) |
+| `update` | Update Claude Code (forwards to `claude update`); warns about pinned rigs |
+| `versions` | List installed Claude Code versions on disk |
+| `pin <version>` | Pin rig to a specific Claude Code version (`--rig <name>`) |
+| `unpin` | Remove version pin, use system default (`--rig <name>`) |
 | `doctor` | Diagnose broken symlinks, plugin/MCP health, inherited items |
 
 ## How It Works

@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 )
@@ -189,4 +190,43 @@ func claudeCodeBinary() string {
 		return "claude.exe"
 	}
 	return "claude"
+}
+
+// claudeVersionsDir discovers the directory containing Claude Code version binaries
+// by following the symlink from the claude binary (e.g. ~/.local/bin/claude →
+// ~/.local/share/claude/versions/2.1.92 → parent dir).
+// Returns empty string if the binary is not a symlink or the path can't be resolved.
+func claudeVersionsDir() string {
+	binary := claudeCodeBinary()
+	binPath, err := exec.LookPath(binary)
+	if err != nil {
+		return ""
+	}
+	target, err := os.Readlink(binPath)
+	if err != nil {
+		return "" // not a symlink
+	}
+	// Resolve relative symlink targets
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(filepath.Dir(binPath), target)
+	}
+	dir := filepath.Dir(target)
+	if _, err := os.Stat(dir); err != nil {
+		return ""
+	}
+	return dir
+}
+
+// claudeCurrentVersion returns the version the system claude symlink points to.
+func claudeCurrentVersion() string {
+	binary := claudeCodeBinary()
+	binPath, err := exec.LookPath(binary)
+	if err != nil {
+		return ""
+	}
+	target, err := os.Readlink(binPath)
+	if err != nil {
+		return ""
+	}
+	return filepath.Base(target)
 }
