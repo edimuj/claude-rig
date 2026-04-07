@@ -303,26 +303,38 @@ claude-rig plugin list --rig minimal
 
 **Why not `claude plugin` directly?** When a rig is active, `CLAUDE_CONFIG_DIR` points Claude at the rig directory. But if you run `claude plugin add` from a fresh shell (without the rig env set), the plugin lands in `~/.claude/` — not your rig. `claude-rig plugin` always resolves the correct rig and sets the environment, so the plugin ends up where you expect.
 
-### Version Pinning
+### Version Management
 
-Pin individual rigs to specific Claude Code versions — useful for testing new releases safely or reproducing bugs on older versions.
+claude-rig manages its own version resolution independently from the system `claude` symlink. This prevents a common problem: Claude Code's auto-updater in one rig can re-point the system symlink to a different version, silently affecting every other rig.
+
+**How it works:** On launch, claude-rig scans `~/.local/share/claude/versions/` (or equivalent), picks the highest version, and maintains its own symlink at `~/.claude-rig/claude-latest`. All unpinned rigs use this — never the system symlink. The managed symlink only moves forward; it never downgrades.
 
 ```bash
-# See what versions are available on disk
+# See installed versions — * marks what unpinned rigs use
 claude-rig versions
+#   2.1.85  (symlink)     ← system symlink points here
+#   2.1.91
+# * 2.1.92  (latest)      ← what unpinned rigs actually use
 
+# Update Claude Code (downloads new version, refreshes latest link)
+claude-rig update
+```
+
+#### Version Pinning
+
+Pin individual rigs to specific Claude Code versions — useful for testing new releases safely or keeping a stable setup while experimenting elsewhere.
+
+```bash
 # Pin a rig to a specific version
 claude-rig pin 2.1.85
 claude-rig pin 2.1.85 --rig staging
 
-# Remove the pin (rig uses system default again)
+# Remove the pin (rig uses latest on disk again)
 claude-rig unpin
 claude-rig unpin --rig staging
 ```
 
-When a rig is pinned, `launch` uses that exact binary instead of the system default. The auto-updater is also disabled for pinned rigs so a running session won't silently upgrade itself.
-
-`claude-rig update` still works normally — it updates the system default. Pinned rigs are not affected, and you'll see a reminder about them after each update.
+When a rig is pinned, `launch` uses that exact binary instead of the latest. The auto-updater is also disabled for pinned rigs so a running session won't silently upgrade itself. Pinned rigs are not affected by `claude-rig update`, and you'll see a reminder about them after each update.
 
 ## Commands
 
@@ -378,10 +390,11 @@ Each rig is a full config directory under `~/.claude-rig/rigs/<name>/`:
 
 On `launch`, claude-rig:
 
-1. Sets `CLAUDE_CONFIG_DIR` to the rig directory
-2. Loads global `~/.claude/CLAUDE.md` via `--add-dir`
-3. Refreshes symlinks to pick up any new shared files
-4. Replaces itself with Claude Code via `exec` (Unix) or spawns it as a child process (Windows)
+1. Resolves the binary: pinned version if set, otherwise latest on disk via `~/.claude-rig/claude-latest`
+2. Sets `CLAUDE_CONFIG_DIR` to the rig directory
+3. Loads global `~/.claude/CLAUDE.md` via `--add-dir`
+4. Refreshes symlinks to pick up any new shared files
+5. Replaces itself with Claude Code via `exec` (Unix) or spawns it as a child process (Windows)
 
 Two Claude Code instances with different rigs run simultaneously without conflicts.
 

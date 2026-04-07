@@ -2203,6 +2203,11 @@ func cmdUpdate(args []string) error {
 		return err
 	}
 
+	// Refresh the managed latest symlink after update
+	if latest := updateLatestLink(); latest != "" {
+		fmt.Fprintf(os.Stderr, "claude-rig latest: %s\n", filepath.Base(latest))
+	}
+
 	// Warn about pinned rigs
 	root, _ := rigsRoot()
 	if root != "" {
@@ -2271,7 +2276,7 @@ func cmdLaunch(args []string) error {
 		fmt.Fprintf(os.Stderr, "Warning: could not sync inherited contents: %v\n", err)
 	}
 
-	// Resolve binary: use pinned version if set, otherwise system default
+	// Resolve binary: pinned version → latest on disk → system symlink fallback
 	rigCfg := loadRigConfig(dir)
 	binary := claudeCodeBinary()
 	var binPath string
@@ -2288,7 +2293,19 @@ func cmdLaunch(args []string) error {
 			}
 		}
 		if binPath == "" {
-			fmt.Fprintf(os.Stderr, "Warning: pinned version %s not found, falling back to system default\n", rigCfg.ClaudeVersion)
+			fmt.Fprintf(os.Stderr, "Warning: pinned version %s not found, falling back to latest on disk\n", rigCfg.ClaudeVersion)
+		}
+	}
+	if binPath == "" {
+		// Use latest version on disk rather than following the system symlink,
+		// which can be mutated by any rig's auto-updater
+		if latest := updateLatestLink(); latest != "" {
+			binPath = latest
+			latestVer := filepath.Base(latest)
+			symVer := claudeCurrentVersion()
+			if symVer != "" && symVer != latestVer {
+				fmt.Fprintf(os.Stderr, "Using Claude %s (latest on disk; system symlink points to %s)\n", latestVer, symVer)
+			}
 		}
 	}
 	if binPath == "" {
@@ -4174,12 +4191,15 @@ func cmdVersions() error {
 		return fmt.Errorf("could not discover Claude Code versions directory (binary is not a symlink)")
 	}
 
+	// Refresh the managed latest symlink
+	updateLatestLink()
+
 	entries, err := os.ReadDir(vDir)
 	if err != nil {
 		return fmt.Errorf("reading versions directory: %w", err)
 	}
 
-	current := claudeCurrentVersion()
+	symlink := claudeCurrentVersion()
 
 	// Collect rig → pinned version for annotation
 	root, _ := rigsRoot()
@@ -4199,7 +4219,7 @@ func cmdVersions() error {
 		}
 	}
 
-	// Collect and sort versions
+	// Collect and sort versions (proper semver, not lexicographic)
 	var versions []string
 	for _, e := range entries {
 		if e.IsDir() {
@@ -4207,16 +4227,27 @@ func cmdVersions() error {
 		}
 		versions = append(versions, e.Name())
 	}
-	sort.Strings(versions)
+	sort.Slice(versions, func(i, j int) bool {
+		return compareVersions(versions[i], versions[j]) < 0
+	})
+
+	// Latest = highest version on disk (what unpinned rigs use)
+	var latest string
+	if len(versions) > 0 {
+		latest = versions[len(versions)-1]
+	}
 
 	for _, v := range versions {
 		marker := "  "
-		if v == current {
+		if v == latest {
 			marker = "* "
 		}
 		line := fmt.Sprintf("%s%s", marker, v)
-		if v == current {
-			line += "  (current)"
+		if v == latest {
+			line += "  (latest)"
+		}
+		if v == symlink && v != latest {
+			line += "  (symlink)"
 		}
 		if rigs, ok := pinnedRigs[v]; ok {
 			line += fmt.Sprintf("  [pinned: %s]", strings.Join(rigs, ", "))

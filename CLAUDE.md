@@ -22,6 +22,7 @@ No interfaces, no packages, no abstractions. Functions call functions.
 - Auth files (`.credentials.json`, `.claude.json`, `statsig/`) shared via `--link-auth`
 - `.claude.json` lives in `~/` not `~/.claude/` — special-cased in auth linking
 - `CLAUDE_CONFIG_DIR` env var points Claude Code at the rig directory
+- `launch` resolves binary via: pinned version → latest on disk (`~/.claude-rig/claude-latest`) → system symlink fallback
 - `launch` uses `syscall.Exec` (replaces process, not subprocess)
 - `rig.json` in rig dir controls isolation (`{"isolate": [...]}`), inheritance (`{"inherit": [...]}`),
   sync tracking (`{"synced_plugins": [...], "synced_mcp": [...]}`), and plugin MCP provenance (`{"plugin_mcp": {"server": "plugin@market"}}`)

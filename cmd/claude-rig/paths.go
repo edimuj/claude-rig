@@ -5,6 +5,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 )
 
 // rigSpecificItems are directories/files that are unique per rig.
@@ -229,4 +231,75 @@ func claudeCurrentVersion() string {
 		return ""
 	}
 	return filepath.Base(target)
+}
+
+// compareVersions compares two version strings numerically (e.g. "2.1.9" < "2.1.85").
+// Returns -1, 0, or 1.
+func compareVersions(a, b string) int {
+	partsA := strings.Split(a, ".")
+	partsB := strings.Split(b, ".")
+	maxLen := len(partsA)
+	if len(partsB) > maxLen {
+		maxLen = len(partsB)
+	}
+	for i := 0; i < maxLen; i++ {
+		var na, nb int
+		if i < len(partsA) {
+			na, _ = strconv.Atoi(partsA[i])
+		}
+		if i < len(partsB) {
+			nb, _ = strconv.Atoi(partsB[i])
+		}
+		if na < nb {
+			return -1
+		}
+		if na > nb {
+			return 1
+		}
+	}
+	return 0
+}
+
+// updateLatestLink ensures ~/.claude-rig/claude-latest points to the highest
+// version binary on disk. Returns the resolved binary path, or "" if the
+// versions directory can't be found.
+func updateLatestLink() string {
+	vDir := claudeVersionsDir()
+	if vDir == "" {
+		return ""
+	}
+	entries, err := os.ReadDir(vDir)
+	if err != nil {
+		return ""
+	}
+	var best string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if len(name) == 0 || name[0] < '0' || name[0] > '9' {
+			continue
+		}
+		if best == "" || compareVersions(name, best) > 0 {
+			best = name
+		}
+	}
+	if best == "" {
+		return ""
+	}
+	bestPath := filepath.Join(vDir, best)
+
+	// Update the managed symlink
+	rigBase, err := rigHome()
+	if err != nil {
+		return bestPath
+	}
+	link := filepath.Join(rigBase, "claude-latest")
+	current, _ := os.Readlink(link)
+	if current != bestPath {
+		os.Remove(link)
+		os.Symlink(bestPath, link)
+	}
+	return bestPath
 }
