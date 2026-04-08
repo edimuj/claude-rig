@@ -112,8 +112,9 @@ var isolatableItems = []string{
 	"paste-cache",
 	"ide",
 	"commands",
-	"plugins", // special: sync copies plugin cache + manifest, not file-level symlinks
-	"mcp",     // special: sync merges mcpServers in .claude.json, not file-level
+	"plugins",  // special: sync copies plugin cache + manifest, not file-level symlinks
+	"mcp",      // special: sync merges mcpServers in .claude.json, not file-level
+	"settings", // special: sync merges default-settings.json keys into settings.json
 }
 
 // defaultIsolatedItems are isolated automatically when creating a new rig.
@@ -178,6 +179,14 @@ func isIsolatable(name string) bool {
 		}
 	}
 	return false
+}
+
+func defaultSettingsPath() string {
+	home, err := rigHome()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, "default-settings.json")
 }
 
 func rigConfigPath(rigDir string) string {

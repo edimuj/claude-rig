@@ -24,7 +24,8 @@ type rigConfig struct {
 	SyncedPlugins []string          `json:"synced_plugins,omitempty"`
 	SyncedMCP     []string          `json:"synced_mcp,omitempty"`
 	PluginMCP     map[string]string `json:"plugin_mcp,omitempty"`     // MCP server name → plugin key
-	ClaudeVersion string            `json:"claude_version,omitempty"` // pinned Claude Code binary version
+	ClaudeVersion     string            `json:"claude_version,omitempty"`      // pinned Claude Code binary version
+	SettingsOverrides []string          `json:"settings_overrides,omitempty"` // dot-paths protected from settings sync
 }
 
 // pluginManifest represents installed_plugins.json.
@@ -76,6 +77,410 @@ func (c rigConfig) isInherited(name string) bool {
 		}
 	}
 	return false
+}
+
+func (c rigConfig) hasSettingsOverride(key string) bool {
+	for _, item := range c.SettingsOverrides {
+		if item == key {
+			return true
+		}
+	}
+	return false
+}
+
+// --- Default settings helpers ---
+
+// parseDotPath splits a dot-notation key into path segments.
+func parseDotPath(key string) []string {
+	if key == "" {
+		return nil
+	}
+	return strings.Split(key, ".")
+}
+
+// getNestedValue retrieves a value from a nested map using a dot-path slice.
+func getNestedValue(m map[string]any, path []string) (any, bool) {
+	if len(path) == 0 {
+		return nil, false
+	}
+	current := any(m)
+	for _, key := range path {
+		obj, ok := current.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		current, ok = obj[key]
+		if !ok {
+			return nil, false
+		}
+	}
+	return current, true
+}
+
+// setNestedValue sets a value in a nested map using a dot-path slice,
+// creating intermediate maps as needed.
+func setNestedValue(m map[string]any, path []string, val any) {
+	if len(path) == 0 {
+		return
+	}
+	for i := 0; i < len(path)-1; i++ {
+		next, ok := m[path[i]]
+		if !ok {
+			child := make(map[string]any)
+			m[path[i]] = child
+			m = child
+			continue
+		}
+		child, ok := next.(map[string]any)
+		if !ok {
+			child = make(map[string]any)
+			m[path[i]] = child
+		}
+		m = child
+	}
+	m[path[len(path)-1]] = val
+}
+
+// deleteNestedValue removes a key from a nested map using a dot-path slice.
+// Cleans up empty parent maps.
+func deleteNestedValue(m map[string]any, path []string) bool {
+	if len(path) == 0 {
+		return false
+	}
+	if len(path) == 1 {
+		if _, ok := m[path[0]]; ok {
+			delete(m, path[0])
+			return true
+		}
+		return false
+	}
+	child, ok := m[path[0]].(map[string]any)
+	if !ok {
+		return false
+	}
+	deleted := deleteNestedValue(child, path[1:])
+	if deleted && len(child) == 0 {
+		delete(m, path[0])
+	}
+	return deleted
+}
+
+// flattenKeys returns all leaf dot-paths in a nested map.
+func flattenKeys(m map[string]any, prefix string) []string {
+	var keys []string
+	for k, v := range m {
+		full := k
+		if prefix != "" {
+			full = prefix + "." + k
+		}
+		if sub, ok := v.(map[string]any); ok {
+			keys = append(keys, flattenKeys(sub, full)...)
+		} else {
+			keys = append(keys, full)
+		}
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// loadDefaultSettings reads ~/.claude-rig/default-settings.json.
+func loadDefaultSettings() (map[string]any, error) {
+	path := defaultSettingsPath()
+	if path == "" {
+		return nil, fmt.Errorf("could not determine rig home")
+	}
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return make(map[string]any), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+// saveDefaultSettings writes ~/.claude-rig/default-settings.json.
+func saveDefaultSettings(m map[string]any) error {
+	path := defaultSettingsPath()
+	if path == "" {
+		return fmt.Errorf("could not determine rig home")
+	}
+	data, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(data, '\n'), 0644)
+}
+
+// syncDefaultSettings applies default settings to a single rig's settings.json.
+// Keys listed in SettingsOverrides are preserved. Skipped if settings is isolated.
+func syncDefaultSettings(rigDir string) ([]string, error) {
+	cfg := loadRigConfig(rigDir)
+	if cfg.isIsolated("settings") {
+		return nil, nil
+	}
+
+	defaults, err := loadDefaultSettings()
+	if err != nil || len(defaults) == 0 {
+		return nil, err
+	}
+
+	settingsPath := filepath.Join(rigDir, "settings.json")
+	rigSettings, _ := readJSONFile(settingsPath)
+	if rigSettings == nil {
+		rigSettings = make(map[string]any)
+	}
+
+	var applied []string
+	for _, dotPath := range flattenKeys(defaults, "") {
+		if cfg.hasSettingsOverride(dotPath) {
+			continue
+		}
+		path := parseDotPath(dotPath)
+		val, _ := getNestedValue(defaults, path)
+		setNestedValue(rigSettings, path, val)
+		applied = append(applied, dotPath)
+	}
+
+	if len(applied) > 0 {
+		if err := writeJSONFile(settingsPath, rigSettings); err != nil {
+			return nil, err
+		}
+	}
+	return applied, nil
+}
+
+// removeDefaultSettingFromRig removes a dot-path key from a rig's settings.json
+// unless the key is in SettingsOverrides.
+func removeDefaultSettingFromRig(rigDir, dotPath string) error {
+	cfg := loadRigConfig(rigDir)
+	if cfg.isIsolated("settings") || cfg.hasSettingsOverride(dotPath) {
+		return nil
+	}
+
+	settingsPath := filepath.Join(rigDir, "settings.json")
+	settings, err := readJSONFile(settingsPath)
+	if err != nil || settings == nil {
+		return nil
+	}
+
+	if deleteNestedValue(settings, parseDotPath(dotPath)) {
+		return writeJSONFile(settingsPath, settings)
+	}
+	return nil
+}
+
+// parseJSONValue tries to parse a string as JSON; falls back to treating it as a plain string.
+func parseJSONValue(s string) any {
+	var v any
+	if err := json.Unmarshal([]byte(s), &v); err == nil {
+		return v
+	}
+	return s
+}
+
+// --- Settings commands ---
+
+func cmdSettings(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: claude-rig settings <set|remove|list|override> ...")
+	}
+	switch args[0] {
+	case "set":
+		return cmdSettingsSet(args[1:])
+	case "remove":
+		return cmdSettingsRemove(args[1:])
+	case "list":
+		return cmdSettingsList()
+	case "override":
+		return cmdSettingsOverride(args[1:])
+	default:
+		return fmt.Errorf("unknown settings subcommand %q\nUsage: claude-rig settings <set|remove|list|override>", args[0])
+	}
+}
+
+func cmdSettingsSet(args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: claude-rig settings set <key> <value>")
+	}
+	key := args[0]
+	value := strings.Join(args[1:], " ")
+
+	defaults, err := loadDefaultSettings()
+	if err != nil {
+		return err
+	}
+
+	setNestedValue(defaults, parseDotPath(key), parseJSONValue(value))
+	if err := saveDefaultSettings(defaults); err != nil {
+		return err
+	}
+
+	// Sync to all rigs
+	root, err := rigsRoot()
+	if err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Printf("Set default %s (no rigs to sync)\n", key)
+			return nil
+		}
+		return err
+	}
+
+	var count int
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dir, _ := rigDir(e.Name())
+		applied, err := syncDefaultSettings(dir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  %s: %v\n", e.Name(), err)
+			continue
+		}
+		if len(applied) > 0 {
+			count++
+		}
+	}
+	fmt.Printf("Set default %s — applied to %d rig(s)\n", key, count)
+	return nil
+}
+
+func cmdSettingsRemove(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: claude-rig settings remove <key>")
+	}
+	key := args[0]
+
+	defaults, err := loadDefaultSettings()
+	if err != nil {
+		return err
+	}
+
+	if !deleteNestedValue(defaults, parseDotPath(key)) {
+		return fmt.Errorf("key %q not found in defaults", key)
+	}
+	if err := saveDefaultSettings(defaults); err != nil {
+		return err
+	}
+
+	// Remove from all rigs
+	root, err := rigsRoot()
+	if err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	var count int
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dir, _ := rigDir(e.Name())
+		if err := removeDefaultSettingFromRig(dir, key); err != nil {
+			fmt.Fprintf(os.Stderr, "  %s: %v\n", e.Name(), err)
+		} else {
+			count++
+		}
+	}
+	fmt.Printf("Removed default %s — updated %d rig(s)\n", key, count)
+	return nil
+}
+
+func cmdSettingsList() error {
+	defaults, err := loadDefaultSettings()
+	if err != nil {
+		return err
+	}
+	if len(defaults) == 0 {
+		fmt.Println("No default settings configured.")
+		return nil
+	}
+	data, err := json.MarshalIndent(defaults, "", "  ")
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(data))
+	return nil
+}
+
+func cmdSettingsOverride(args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: claude-rig settings override <key> <value> [--rig <name>]")
+	}
+
+	var rigName string
+	var positional []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--rig" && i+1 < len(args) {
+			rigName = args[i+1]
+			i++
+		} else if strings.HasPrefix(args[i], "--rig=") {
+			rigName = strings.TrimPrefix(args[i], "--rig=")
+		} else {
+			positional = append(positional, args[i])
+		}
+	}
+
+	if len(positional) < 2 {
+		return fmt.Errorf("usage: claude-rig settings override <key> <value> [--rig <name>]")
+	}
+	key := positional[0]
+	value := strings.Join(positional[1:], " ")
+
+	// Resolve rig
+	if rigName == "" {
+		rig, _, err := findRC()
+		if err != nil {
+			return err
+		}
+		if rig == "" {
+			return fmt.Errorf("no --rig specified and no .claude-rig file found")
+		}
+		rigName = rig
+	}
+
+	dir, err := rigDir(rigName)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return fmt.Errorf("rig %q does not exist", rigName)
+	}
+
+	// Update settings.json
+	settingsPath := filepath.Join(dir, "settings.json")
+	settings, _ := readJSONFile(settingsPath)
+	if settings == nil {
+		settings = make(map[string]any)
+	}
+	setNestedValue(settings, parseDotPath(key), parseJSONValue(value))
+	if err := writeJSONFile(settingsPath, settings); err != nil {
+		return err
+	}
+
+	// Track override in rig.json
+	cfg := loadRigConfig(dir)
+	if !cfg.hasSettingsOverride(key) {
+		cfg.SettingsOverrides = append(cfg.SettingsOverrides, key)
+		sort.Strings(cfg.SettingsOverrides)
+		if err := saveRigConfig(dir, cfg); err != nil {
+			return err
+		}
+	}
+
+	fmt.Printf("Rig %q: %s overridden locally (protected from sync)\n", rigName, key)
+	return nil
 }
 
 // extractBundledPlugin writes the embedded plugin to ~/.claude-rig/bundled-plugin/
@@ -1492,6 +1897,13 @@ func cmdCreate(args []string) error {
 		fmt.Printf("Inheriting: %s\n", strings.Join(inheritItems, ", "))
 	}
 
+	// Apply default settings
+	if applied, err := syncDefaultSettings(dir); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not apply default settings: %v\n", err)
+	} else if len(applied) > 0 {
+		fmt.Printf("Applied %d default setting(s)\n", len(applied))
+	}
+
 	fmt.Printf("Created rig %q at %s\n", name, dir)
 	fmt.Printf("Launch with: claude-rig launch %s\n", name)
 	return nil
@@ -1590,6 +2002,13 @@ func cmdClone(args []string) error {
 			return fmt.Errorf("syncing inherited contents: %w", err)
 		}
 		fmt.Printf("Inheriting: %s\n", strings.Join(inheritItems, ", "))
+	}
+
+	// Apply default settings
+	if applied, err := syncDefaultSettings(destDir); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not apply default settings: %v\n", err)
+	} else if len(applied) > 0 {
+		fmt.Printf("Applied %d default setting(s)\n", len(applied))
 	}
 
 	fmt.Printf("Cloned %q → %q\n", srcName, destName)
@@ -2051,7 +2470,7 @@ func cmdSync(args []string) error {
 	}
 
 	var names []string
-	var noPlugins, noMCP, noInherit bool
+	var noPlugins, noMCP, noInherit, noSettings bool
 	var fromRig string
 	for _, a := range args {
 		switch a {
@@ -2061,6 +2480,8 @@ func cmdSync(args []string) error {
 			noMCP = true
 		case "--no-inherit":
 			noInherit = true
+		case "--no-settings":
+			noSettings = true
 		default:
 			if strings.HasPrefix(a, "--from=") {
 				fromRig = strings.TrimPrefix(a, "--from=")
@@ -2162,6 +2583,16 @@ func cmdSync(args []string) error {
 				cfg.SyncedMCP = appendUnique(cfg.SyncedMCP, synced...)
 				saveRigConfig(dir, cfg)
 				fmt.Printf("  %s — synced %d MCP server(s)\n", name, len(synced))
+			}
+		}
+
+		// 5. Default settings
+		if !noSettings && !cfg.isIsolated("settings") {
+			applied, err := syncDefaultSettings(dir)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "  %s: settings sync error: %v\n", name, err)
+			} else if len(applied) > 0 {
+				fmt.Printf("  %s — applied %d default setting(s)\n", name, len(applied))
 			}
 		}
 

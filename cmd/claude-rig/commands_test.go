@@ -583,3 +583,290 @@ func sliceEqual(a, b []string) bool {
 	}
 	return true
 }
+
+// --- Default settings tests ---
+
+func TestParseDotPath(t *testing.T) {
+	tests := []struct {
+		input string
+		want  []string
+	}{
+		{"", nil},
+		{"theme", []string{"theme"}},
+		{"env.FOO", []string{"env", "FOO"}},
+		{"a.b.c", []string{"a", "b", "c"}},
+	}
+	for _, tt := range tests {
+		got := parseDotPath(tt.input)
+		if !sliceEqual(got, tt.want) {
+			t.Errorf("parseDotPath(%q) = %v, want %v", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestSetGetNestedValue(t *testing.T) {
+	m := make(map[string]any)
+
+	// Set a deeply nested value
+	setNestedValue(m, []string{"a", "b", "c"}, "deep")
+	val, ok := getNestedValue(m, []string{"a", "b", "c"})
+	if !ok || val != "deep" {
+		t.Errorf("getNestedValue after set: got %v, %v", val, ok)
+	}
+
+	// Set a top-level value
+	setNestedValue(m, []string{"top"}, 42.0)
+	val, ok = getNestedValue(m, []string{"top"})
+	if !ok || val != 42.0 {
+		t.Errorf("top-level get: got %v, %v", val, ok)
+	}
+
+	// Overwrite non-map with map path
+	setNestedValue(m, []string{"top", "nested"}, "v")
+	val, ok = getNestedValue(m, []string{"top", "nested"})
+	if !ok || val != "v" {
+		t.Errorf("overwrite non-map: got %v, %v", val, ok)
+	}
+
+	// Get missing key
+	_, ok = getNestedValue(m, []string{"missing"})
+	if ok {
+		t.Error("expected false for missing key")
+	}
+}
+
+func TestDeleteNestedValue(t *testing.T) {
+	m := map[string]any{
+		"a": map[string]any{
+			"b": "val",
+			"c": "other",
+		},
+		"top": "x",
+	}
+
+	// Delete leaf, parent stays because it has other keys
+	if !deleteNestedValue(m, []string{"a", "b"}) {
+		t.Error("expected true for existing key")
+	}
+	if _, ok := getNestedValue(m, []string{"a", "b"}); ok {
+		t.Error("key should be deleted")
+	}
+	if _, ok := getNestedValue(m, []string{"a", "c"}); !ok {
+		t.Error("sibling should remain")
+	}
+
+	// Delete last child — parent should be cleaned up
+	deleteNestedValue(m, []string{"a", "c"})
+	if _, ok := m["a"]; ok {
+		t.Error("empty parent map should be cleaned up")
+	}
+
+	// Delete top-level
+	if !deleteNestedValue(m, []string{"top"}) {
+		t.Error("expected true for top-level key")
+	}
+
+	// Delete missing
+	if deleteNestedValue(m, []string{"nope"}) {
+		t.Error("expected false for missing key")
+	}
+}
+
+func TestFlattenKeys(t *testing.T) {
+	m := map[string]any{
+		"theme": "dark",
+		"env": map[string]any{
+			"FOO": "bar",
+			"BAZ": "qux",
+		},
+		"list": []any{1, 2, 3},
+	}
+	got := flattenKeys(m, "")
+	want := []string{"env.BAZ", "env.FOO", "list", "theme"}
+	if !sliceEqual(got, want) {
+		t.Errorf("flattenKeys = %v, want %v", got, want)
+	}
+}
+
+func TestSyncDefaultSettingsApplies(t *testing.T) {
+	home := setupTestHome(t)
+	dir := createRigDir(t, home, "test")
+	os.WriteFile(filepath.Join(dir, "settings.json"), []byte("{}\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "rig.json"), []byte("{}\n"), 0644)
+
+	// Write defaults
+	defaults := map[string]any{"theme": "dark", "env": map[string]any{"FOO": "bar"}}
+	saveDefaultSettings(defaults)
+
+	applied, err := syncDefaultSettings(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(applied) != 2 {
+		t.Errorf("expected 2 applied, got %d: %v", len(applied), applied)
+	}
+
+	// Verify settings.json
+	settings, err := readJSONFile(filepath.Join(dir, "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings["theme"] != "dark" {
+		t.Errorf("theme = %v, want dark", settings["theme"])
+	}
+	env, ok := settings["env"].(map[string]any)
+	if !ok || env["FOO"] != "bar" {
+		t.Errorf("env.FOO = %v, want bar", settings["env"])
+	}
+}
+
+func TestSyncDefaultSettingsSkipsOverrides(t *testing.T) {
+	home := setupTestHome(t)
+	dir := createRigDir(t, home, "test")
+	os.WriteFile(filepath.Join(dir, "settings.json"), []byte(`{"theme":"light"}`+"\n"), 0644)
+
+	cfg := rigConfig{SettingsOverrides: []string{"theme"}}
+	saveRigConfig(dir, cfg)
+
+	defaults := map[string]any{"theme": "dark", "other": true}
+	saveDefaultSettings(defaults)
+
+	applied, err := syncDefaultSettings(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// "theme" should be skipped, "other" applied
+	for _, a := range applied {
+		if a == "theme" {
+			t.Error("theme should have been skipped (overridden)")
+		}
+	}
+
+	settings, _ := readJSONFile(filepath.Join(dir, "settings.json"))
+	if settings["theme"] != "light" {
+		t.Errorf("theme = %v, want light (override)", settings["theme"])
+	}
+	if settings["other"] != true {
+		t.Errorf("other = %v, want true", settings["other"])
+	}
+}
+
+func TestSyncDefaultSettingsSkipsIsolated(t *testing.T) {
+	home := setupTestHome(t)
+	dir := createRigDir(t, home, "test")
+	os.WriteFile(filepath.Join(dir, "settings.json"), []byte("{}\n"), 0644)
+
+	cfg := rigConfig{Isolate: []string{"settings"}}
+	saveRigConfig(dir, cfg)
+
+	defaults := map[string]any{"theme": "dark"}
+	saveDefaultSettings(defaults)
+
+	applied, err := syncDefaultSettings(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(applied) != 0 {
+		t.Errorf("expected 0 applied for isolated settings, got %d", len(applied))
+	}
+
+	// settings.json should be unchanged
+	settings, _ := readJSONFile(filepath.Join(dir, "settings.json"))
+	if _, ok := settings["theme"]; ok {
+		t.Error("theme should not be set in isolated rig")
+	}
+}
+
+func TestSyncDefaultSettingsNestedMerge(t *testing.T) {
+	home := setupTestHome(t)
+	dir := createRigDir(t, home, "test")
+	// Rig has existing env.OTHER
+	os.WriteFile(filepath.Join(dir, "settings.json"), []byte(`{"env":{"OTHER":"keep"}}`+"\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "rig.json"), []byte("{}\n"), 0644)
+
+	defaults := map[string]any{"env": map[string]any{"FOO": "bar"}}
+	saveDefaultSettings(defaults)
+
+	_, err := syncDefaultSettings(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	settings, _ := readJSONFile(filepath.Join(dir, "settings.json"))
+	env, ok := settings["env"].(map[string]any)
+	if !ok {
+		t.Fatal("env should be a map")
+	}
+	if env["FOO"] != "bar" {
+		t.Errorf("env.FOO = %v, want bar", env["FOO"])
+	}
+	if env["OTHER"] != "keep" {
+		t.Errorf("env.OTHER = %v, want keep (should not be clobbered)", env["OTHER"])
+	}
+}
+
+func TestRemoveDefaultSettingFromRig(t *testing.T) {
+	home := setupTestHome(t)
+	dir := createRigDir(t, home, "test")
+	os.WriteFile(filepath.Join(dir, "settings.json"), []byte(`{"theme":"dark","other":"x"}`+"\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "rig.json"), []byte("{}\n"), 0644)
+
+	if err := removeDefaultSettingFromRig(dir, "theme"); err != nil {
+		t.Fatal(err)
+	}
+
+	settings, _ := readJSONFile(filepath.Join(dir, "settings.json"))
+	if _, ok := settings["theme"]; ok {
+		t.Error("theme should be removed")
+	}
+	if settings["other"] != "x" {
+		t.Error("other should remain")
+	}
+}
+
+func TestRemoveDefaultSettingSkipsOverride(t *testing.T) {
+	home := setupTestHome(t)
+	dir := createRigDir(t, home, "test")
+	os.WriteFile(filepath.Join(dir, "settings.json"), []byte(`{"theme":"light"}`+"\n"), 0644)
+
+	cfg := rigConfig{SettingsOverrides: []string{"theme"}}
+	saveRigConfig(dir, cfg)
+
+	if err := removeDefaultSettingFromRig(dir, "theme"); err != nil {
+		t.Fatal(err)
+	}
+
+	settings, _ := readJSONFile(filepath.Join(dir, "settings.json"))
+	if settings["theme"] != "light" {
+		t.Errorf("theme = %v, want light (should be preserved by override)", settings["theme"])
+	}
+}
+
+func TestParseJSONValue(t *testing.T) {
+	tests := []struct {
+		input string
+		want  any
+	}{
+		{`true`, true},
+		{`false`, false},
+		{`42`, 42.0},
+		{`"hello"`, "hello"},
+		{`plain string`, "plain string"},
+		{`[1,2,3]`, []any{1.0, 2.0, 3.0}},
+	}
+	for _, tt := range tests {
+		got := parseJSONValue(tt.input)
+		switch want := tt.want.(type) {
+		case []any:
+			gotSlice, ok := got.([]any)
+			if !ok || len(gotSlice) != len(want) {
+				t.Errorf("parseJSONValue(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		default:
+			if got != tt.want {
+				t.Errorf("parseJSONValue(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		}
+	}
+}

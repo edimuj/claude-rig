@@ -48,7 +48,7 @@ No interfaces, no packages, no abstractions. Functions call functions.
 | `clone`          | `cmdClone`         | `cloneFromDefault` for `~/.claude/`, `cloneDir` for rig-to-rig   |
 | `delete`         | `cmdDelete`        | Refuses to delete active rig                                     |
 | `rename`         | `cmdRename`        | Renames rig dir, warns about .claude-rig files                   |
-| `sync`           | `cmdSync`          | Symlinks + inherited + plugins + MCP; `--no-plugins/--no-mcp/--from` |
+| `sync`           | `cmdSync`          | Symlinks + inherited + plugins + MCP + settings; `--no-plugins/--no-mcp/--no-settings/--from` |
 | `update`         | `cmdUpdate`        | Forwards to `claude update`; warns about pinned rigs             |
 | `versions`       | `cmdVersions`      | Lists version binaries on disk, marks current + pinned rigs      |
 | `pin`            | `cmdPin`           | Pin rig to Claude version; disables auto-updater (`--rig`)       |
@@ -71,6 +71,7 @@ No interfaces, no packages, no abstractions. Functions call functions.
 | `status`         | `cmdStatus`        | Disk, sessions (/proc), last used; overview or single-rig detail |
 | `plugin`         | `cmdPlugin`        | Forwards `claude plugin` to active rig; `--rig` to target other  |
 | `update-plugins` | `cmdUpdatePlugins` | Parallel across rigs, calls `claude plugin` CLI                  |
+| `settings`       | `cmdSettings`      | Manage default settings: `set/remove/list/override`; syncs to all rigs |
 | `doctor`         | `cmdDoctor`        | Broken symlinks, inherited items, synced plugins/MCP health      |
 
 ## Adding a New Command

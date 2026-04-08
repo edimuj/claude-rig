@@ -99,6 +99,8 @@ func main() {
 		err = cmdImport(args)
 	case "plugin":
 		err = cmdPlugin(args)
+	case "settings":
+		err = cmdSettings(args)
 	case "doctor":
 		err = cmdDoctor()
 	case "versions":
@@ -156,10 +158,11 @@ Commands:
   list                    List all rigs (* = running sessions)
   delete <name>           Delete a rig
   rename <old> <new>      Rename a rig
-  sync [rig]              Sync symlinks, inherited items, plugins, MCP (all rigs if none given)
+  sync [rig]              Sync symlinks, inherited items, plugins, MCP, settings (all rigs if none given)
     --no-plugins           Skip plugin sync
     --no-mcp               Skip MCP server sync
     --no-inherit           Skip inherited items sync
+    --no-settings          Skip default settings sync
     --from <rig>           Use another rig as plugin/MCP source instead of global
   update                  Update Claude Code (forwards to claude update)
   versions                List available Claude Code versions on disk
@@ -182,6 +185,11 @@ Commands:
   status [rig]            Show rig status (disk, sessions, last used)
   plugin <subcommand>     Run claude plugin commands on active rig (--rig <name>)
   update-plugins [rigs]   Update marketplace plugins (all rigs if none given)
+  settings <subcommand>   Manage default settings applied to all rigs
+    set <key> <value>      Set a default and apply to all rigs immediately
+    remove <key>           Remove a default and strip from all rigs
+    list                   Show current default settings
+    override <key> <value> [--rig <name>]  Pin a per-rig value (survives sync)
   doctor                  Check rigs for broken symlinks and missing items
   init                    Initialize rig system (run once)
   version                 Show version
