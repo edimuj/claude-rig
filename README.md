@@ -128,6 +128,7 @@ claude-rig          # picks up the rig automatically
 | `pin <version>` | Pin rig to a specific Claude Code version |
 | `unpin` | Remove version pin |
 | `update` | Update Claude Code |
+| `blueprint <sub>` | Shareable rig specs: `create`, `apply`, `inspect`, `list`, `pack` |
 | `diff <rig1> <rig2>` | Compare two rigs |
 | `export <rig> [file]` | Export rig to `.tar.gz` |
 | `import <file> <name>` | Import rig from archive |
@@ -167,6 +168,7 @@ On `launch`, claude-rig resolves the binary (pinned or latest on disk), sets `CL
 | Per-project RC files, shell integration, CLAUDE.md, templates | [docs/configuration.md](docs/configuration.md) |
 | Isolation model, configurable isolation, global inheritance | [docs/isolation.md](docs/isolation.md) |
 | Plugin sync, MCP sync, default settings, version management | [docs/sync.md](docs/sync.md) |
+| Blueprints — declarative, shareable rig specs | [docs/blueprints.md](docs/blueprints.md) |
 | Export, import, status, diff | [docs/export-import.md](docs/export-import.md) |
 | Windows setup, known limitations | [docs/windows.md](docs/windows.md) |
 

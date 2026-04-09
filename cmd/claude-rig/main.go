@@ -101,6 +101,8 @@ func main() {
 		err = cmdPlugin(args)
 	case "settings":
 		err = cmdSettings(args)
+	case "blueprint":
+		err = cmdBlueprint(args)
 	case "doctor":
 		err = cmdDoctor()
 	case "versions":
@@ -190,6 +192,12 @@ Commands:
     remove <key>           Remove a default and strip from all rigs
     list                   Show current default settings
     override <key> <value> [--rig <name>]  Pin a per-rig value (survives sync)
+  blueprint <subcommand>  Shareable rig specifications
+    create <name>          Create blueprint from active rig (--from <rig>)
+    apply <source>         Create rig from blueprint (--as <name>, --link-auth, --skip-plugins)
+    inspect <source>       Preview blueprint contents
+    list                   List local blueprints
+    pack <name> [file]     Pack blueprint into .tar.gz for sharing
   doctor                  Check rigs for broken symlinks and missing items
   init                    Initialize rig system (run once)
   version                 Show version

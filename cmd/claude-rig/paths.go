@@ -189,6 +189,22 @@ func defaultSettingsPath() string {
 	return filepath.Join(home, "default-settings.json")
 }
 
+func blueprintsRoot() (string, error) {
+	home, err := rigHome()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, "blueprints"), nil
+}
+
+func blueprintDir(name string) (string, error) {
+	root, err := blueprintsRoot()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, name), nil
+}
+
 func rigConfigPath(rigDir string) string {
 	return filepath.Join(rigDir, "rig.json")
 }

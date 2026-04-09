@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"sort"
@@ -868,5 +869,632 @@ func TestParseJSONValue(t *testing.T) {
 				t.Errorf("parseJSONValue(%q) = %v, want %v", tt.input, got, tt.want)
 			}
 		}
+	}
+}
+
+// --- Blueprint tests ---
+
+// createTestRig sets up a rig with plugins, MCP, settings, skills, and isolation for blueprint testing.
+func createTestRig(t *testing.T, home, name string) string {
+	t.Helper()
+	dir := createRigDir(t, home, name)
+
+	// rig.json with isolation and inherit
+	cfg := rigConfig{
+		Isolate: []string{"conversations", "sessions"},
+		Inherit: []string{"skills"},
+		PluginMCP: map[string]string{
+			"plugin-server": "test-plugin@marketplace",
+		},
+	}
+	saveRigConfig(dir, cfg)
+
+	// settings.json
+	settings := map[string]any{"theme": "dark", "env": map[string]any{"GO111MODULE": "on"}}
+	writeJSONFile(filepath.Join(dir, "settings.json"), settings)
+
+	// .claude.json with MCP servers (manual + plugin-provided)
+	claudeJSON := map[string]any{
+		"mcpServers": map[string]any{
+			"gopls":         map[string]any{"command": "gopls-mcp", "args": []any{"--stdio"}},
+			"plugin-server": map[string]any{"command": "plugin-cmd"},
+		},
+	}
+	writeJSONFile(filepath.Join(dir, ".claude.json"), claudeJSON)
+
+	// CLAUDE.md
+	os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte("# Test Rig\nGo development rig\n"), 0644)
+
+	// Real skill file
+	os.WriteFile(filepath.Join(dir, "skills", "review.md"), []byte("# Code Review Skill\n"), 0644)
+
+	// Inherited symlink in skills (should be skipped by blueprint create)
+	globalSkills := filepath.Join(home, ".claude", "skills")
+	os.MkdirAll(globalSkills, 0755)
+	os.WriteFile(filepath.Join(globalSkills, "global-skill.md"), []byte("global"), 0644)
+	os.Symlink(filepath.Join(globalSkills, "global-skill.md"), filepath.Join(dir, "skills", "global-skill.md"))
+
+	// Real hook file
+	os.WriteFile(filepath.Join(dir, "hooks", "pre-commit.sh"), []byte("#!/bin/bash\necho ok\n"), 0755)
+
+	// default-args
+	os.WriteFile(filepath.Join(dir, "default-args"), []byte("--dangerously-skip-permissions\n"), 0644)
+
+	// installed_plugins.json
+	pluginsDir := filepath.Join(dir, "plugins")
+	manifest := pluginManifest{
+		Version: 2,
+		Plugins: map[string][]pluginEntry{
+			"npm:@anthropic/github": {{Scope: "global", InstallPath: "/tmp/fake", Version: "1.0.0"}},
+			"npm:edimuj/my-plugin":  {{Scope: "global", InstallPath: "/tmp/fake2", Version: "0.5.0"}},
+		},
+	}
+	writePluginManifest(filepath.Join(pluginsDir, "installed_plugins.json"), manifest)
+
+	return dir
+}
+
+func TestBlueprintCreateFromRig(t *testing.T) {
+	home := setupTestHome(t)
+	createTestRig(t, home, "testrig")
+
+	rigPath, _ := rigDir("testrig")
+	t.Setenv("CLAUDE_CONFIG_DIR", rigPath)
+
+	err := cmdBlueprintCreate([]string{"test-bp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bpDir, _ := blueprintDir("test-bp")
+	bp, err := loadBlueprint(bpDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Check name
+	if bp.Name != "test-bp" {
+		t.Errorf("name = %q, want %q", bp.Name, "test-bp")
+	}
+
+	// Check plugins captured
+	sort.Strings(bp.Plugins)
+	if len(bp.Plugins) != 2 {
+		t.Errorf("plugins = %v, want 2", bp.Plugins)
+	}
+
+	// Check MCP — should only have gopls, not plugin-server
+	if len(bp.MCPServers) != 1 {
+		t.Errorf("mcp_servers = %v, want 1 (gopls only)", bp.MCPServers)
+	}
+	if _, ok := bp.MCPServers["gopls"]; !ok {
+		t.Errorf("mcp_servers missing gopls")
+	}
+	if _, ok := bp.MCPServers["plugin-server"]; ok {
+		t.Errorf("mcp_servers should not contain plugin-provided server")
+	}
+
+	// Check settings
+	if bp.Settings["theme"] != "dark" {
+		t.Errorf("settings.theme = %v, want dark", bp.Settings["theme"])
+	}
+
+	// Check isolation
+	if len(bp.Isolation) != 2 {
+		t.Errorf("isolation = %v, want 2", bp.Isolation)
+	}
+
+	// Check inherit
+	if len(bp.Inherit) != 1 || bp.Inherit[0] != "skills" {
+		t.Errorf("inherit = %v, want [skills]", bp.Inherit)
+	}
+
+	// Check args
+	if bp.Args != "--dangerously-skip-permissions" {
+		t.Errorf("args = %q, want --dangerously-skip-permissions", bp.Args)
+	}
+
+	// Check CLAUDE.md was copied
+	data, err := os.ReadFile(filepath.Join(bpDir, "CLAUDE.md"))
+	if err != nil {
+		t.Errorf("CLAUDE.md not copied: %v", err)
+	} else if string(data) != "# Test Rig\nGo development rig\n" {
+		t.Errorf("CLAUDE.md content wrong: %q", string(data))
+	}
+
+	// Check skills — only real file, not symlink
+	entries, _ := os.ReadDir(filepath.Join(bpDir, "skills"))
+	if len(entries) != 1 {
+		t.Errorf("skills has %d files, want 1 (review.md only)", len(entries))
+	} else if entries[0].Name() != "review.md" {
+		t.Errorf("skills[0] = %q, want review.md", entries[0].Name())
+	}
+
+	// Check hooks
+	entries, _ = os.ReadDir(filepath.Join(bpDir, "hooks"))
+	if len(entries) != 1 {
+		t.Errorf("hooks has %d files, want 1", len(entries))
+	}
+}
+
+func TestBlueprintApplyCreatesRig(t *testing.T) {
+	home := setupTestHome(t)
+
+	// Create a blueprint directory manually
+	bpDir := filepath.Join(home, "test-blueprint")
+	os.MkdirAll(bpDir, 0755)
+	os.MkdirAll(filepath.Join(bpDir, "skills"), 0755)
+
+	bp := blueprint{
+		Name:      "applied-rig",
+		Settings:  map[string]any{"theme": "light", "verbose": true},
+		Isolation: []string{"conversations", "sessions", "history.jsonl"},
+		Inherit:   []string{"skills"},
+		Args:      "--verbose",
+		MCPServers: map[string]any{
+			"test-mcp": map[string]any{"command": "test-cmd"},
+		},
+	}
+	data, _ := json.MarshalIndent(bp, "", "  ")
+	os.WriteFile(filepath.Join(bpDir, "blueprint.json"), data, 0644)
+	os.WriteFile(filepath.Join(bpDir, "CLAUDE.md"), []byte("# Applied\n"), 0644)
+	os.WriteFile(filepath.Join(bpDir, "skills", "test-skill.md"), []byte("# Skill\n"), 0644)
+
+	err := cmdBlueprintApply([]string{bpDir, "--skip-plugins"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify rig was created
+	dir, _ := rigDir("applied-rig")
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		t.Fatal("rig directory not created")
+	}
+
+	// Check rig.json isolation
+	cfg := loadRigConfig(dir)
+	if len(cfg.Isolate) != 3 {
+		t.Errorf("isolate = %v, want 3 items", cfg.Isolate)
+	}
+	if len(cfg.Inherit) != 1 || cfg.Inherit[0] != "skills" {
+		t.Errorf("inherit = %v, want [skills]", cfg.Inherit)
+	}
+
+	// Check settings.json
+	settings, err := readJSONFile(filepath.Join(dir, "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings["theme"] != "light" {
+		t.Errorf("settings.theme = %v, want light", settings["theme"])
+	}
+	if settings["verbose"] != true {
+		t.Errorf("settings.verbose = %v, want true", settings["verbose"])
+	}
+
+	// Check .claude.json for MCP servers
+	claudeData, err := readJSONFile(filepath.Join(dir, ".claude.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	servers, _ := claudeData["mcpServers"].(map[string]any)
+	if _, ok := servers["test-mcp"]; !ok {
+		t.Errorf("MCP server test-mcp not found in .claude.json")
+	}
+
+	// Check CLAUDE.md
+	mdData, err := os.ReadFile(filepath.Join(dir, "CLAUDE.md"))
+	if err != nil || string(mdData) != "# Applied\n" {
+		t.Errorf("CLAUDE.md not applied correctly")
+	}
+
+	// Check skills
+	entries, _ := os.ReadDir(filepath.Join(dir, "skills"))
+	found := false
+	for _, e := range entries {
+		if e.Name() == "test-skill.md" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("test-skill.md not found in rig skills")
+	}
+
+	// Check args
+	argsData, err := os.ReadFile(filepath.Join(dir, "default-args"))
+	if err != nil || string(argsData) != "--verbose\n" {
+		t.Errorf("default-args = %q, want --verbose", string(argsData))
+	}
+}
+
+func TestBlueprintRoundTrip(t *testing.T) {
+	home := setupTestHome(t)
+	createTestRig(t, home, "source-rig")
+
+	rigPath, _ := rigDir("source-rig")
+	t.Setenv("CLAUDE_CONFIG_DIR", rigPath)
+
+	// Create blueprint from rig
+	if err := cmdBlueprintCreate([]string{"roundtrip-bp"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Apply blueprint to create new rig
+	bpDir, _ := blueprintDir("roundtrip-bp")
+	if err := cmdBlueprintApply([]string{bpDir, "--as", "dest-rig", "--skip-plugins"}); err != nil {
+		t.Fatal(err)
+	}
+
+	destDir, _ := rigDir("dest-rig")
+
+	// Compare settings
+	srcSettings, _ := readJSONFile(filepath.Join(rigPath, "settings.json"))
+	dstSettings, _ := readJSONFile(filepath.Join(destDir, "settings.json"))
+	if srcSettings["theme"] != dstSettings["theme"] {
+		t.Errorf("theme mismatch: src=%v dst=%v", srcSettings["theme"], dstSettings["theme"])
+	}
+
+	// Compare isolation
+	srcCfg := loadRigConfig(rigPath)
+	dstCfg := loadRigConfig(destDir)
+	if len(srcCfg.Isolate) != len(dstCfg.Isolate) {
+		t.Errorf("isolation count mismatch: src=%d dst=%d", len(srcCfg.Isolate), len(dstCfg.Isolate))
+	}
+
+	// Compare inherit
+	if len(srcCfg.Inherit) != len(dstCfg.Inherit) {
+		t.Errorf("inherit count mismatch: src=%d dst=%d", len(srcCfg.Inherit), len(dstCfg.Inherit))
+	}
+
+	// Compare CLAUDE.md
+	srcMD, _ := os.ReadFile(filepath.Join(rigPath, "CLAUDE.md"))
+	dstMD, _ := os.ReadFile(filepath.Join(destDir, "CLAUDE.md"))
+	if string(srcMD) != string(dstMD) {
+		t.Errorf("CLAUDE.md mismatch")
+	}
+
+	// Compare skills (only real files)
+	srcSkills, _ := os.ReadDir(filepath.Join(rigPath, "skills"))
+	dstSkills, _ := os.ReadDir(filepath.Join(destDir, "skills"))
+	// Filter out symlinks from source for comparison
+	realSrc := 0
+	for _, e := range srcSkills {
+		info, _ := os.Lstat(filepath.Join(rigPath, "skills", e.Name()))
+		if info != nil && info.Mode()&os.ModeSymlink == 0 {
+			realSrc++
+		}
+	}
+	// Dest may have inherited symlinks too, count non-symlinks
+	realDst := 0
+	for _, e := range dstSkills {
+		info, _ := os.Lstat(filepath.Join(destDir, "skills", e.Name()))
+		if info != nil && info.Mode()&os.ModeSymlink == 0 {
+			realDst++
+		}
+	}
+	if realSrc != realDst {
+		t.Errorf("real skill files mismatch: src=%d dst=%d", realSrc, realDst)
+	}
+}
+
+func TestBlueprintSkipsSymlinks(t *testing.T) {
+	home := setupTestHome(t)
+	dir := createRigDir(t, home, "symlink-test")
+	os.WriteFile(filepath.Join(dir, "rig.json"), []byte("{}\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "settings.json"), []byte("{}\n"), 0644)
+
+	// Create a real file and a symlink in skills
+	os.WriteFile(filepath.Join(dir, "skills", "real.md"), []byte("real"), 0644)
+	globalSkills := filepath.Join(home, ".claude", "skills")
+	os.MkdirAll(globalSkills, 0755)
+	os.WriteFile(filepath.Join(globalSkills, "inherited.md"), []byte("inherited"), 0644)
+	os.Symlink(filepath.Join(globalSkills, "inherited.md"), filepath.Join(dir, "skills", "inherited.md"))
+
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+
+	err := cmdBlueprintCreate([]string{"skip-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bpDir, _ := blueprintDir("skip-test")
+	entries, _ := os.ReadDir(filepath.Join(bpDir, "skills"))
+	if len(entries) != 1 {
+		t.Errorf("blueprint skills has %d files, want 1 (real only)", len(entries))
+	}
+	if len(entries) > 0 && entries[0].Name() != "real.md" {
+		t.Errorf("skills[0] = %q, want real.md", entries[0].Name())
+	}
+}
+
+func TestBlueprintApplyWithAsName(t *testing.T) {
+	home := setupTestHome(t)
+
+	bpDir := filepath.Join(home, "bp")
+	os.MkdirAll(bpDir, 0755)
+	bp := blueprint{Name: "original-name"}
+	data, _ := json.MarshalIndent(bp, "", "  ")
+	os.WriteFile(filepath.Join(bpDir, "blueprint.json"), data, 0644)
+
+	err := cmdBlueprintApply([]string{bpDir, "--as", "custom-name", "--skip-plugins"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir, _ := rigDir("custom-name")
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		t.Fatal("rig 'custom-name' not created")
+	}
+	// Original name rig should NOT exist
+	dir2, _ := rigDir("original-name")
+	if _, err := os.Stat(dir2); !os.IsNotExist(err) {
+		t.Fatal("rig 'original-name' should not exist when --as is used")
+	}
+}
+
+func TestBlueprintList(t *testing.T) {
+	setupTestHome(t)
+
+	// Create two blueprints
+	root, _ := blueprintsRoot()
+	os.MkdirAll(root, 0755)
+	for _, name := range []string{"bp-alpha", "bp-beta"} {
+		dir := filepath.Join(root, name)
+		os.MkdirAll(dir, 0755)
+		bp := blueprint{Name: name, Description: "Test " + name}
+		saveBlueprint(dir, bp)
+	}
+
+	// Should not panic
+	err := cmdBlueprintList()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestResolveBlueprintLocal(t *testing.T) {
+	home := setupTestHome(t)
+
+	// 1. Direct directory
+	dirBP := filepath.Join(home, "direct-bp")
+	os.MkdirAll(dirBP, 0755)
+	os.WriteFile(filepath.Join(dirBP, "blueprint.json"), []byte(`{"name":"direct"}`), 0644)
+
+	resolved, cleanup, err := resolveBlueprint(dirBP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanup()
+	if resolved != dirBP {
+		t.Errorf("resolved = %q, want %q", resolved, dirBP)
+	}
+
+	// 2. Library lookup
+	root, _ := blueprintsRoot()
+	os.MkdirAll(root, 0755)
+	libDir := filepath.Join(root, "my-lib-bp")
+	os.MkdirAll(libDir, 0755)
+	os.WriteFile(filepath.Join(libDir, "blueprint.json"), []byte(`{"name":"my-lib-bp"}`), 0644)
+
+	resolved, cleanup, err = resolveBlueprint("my-lib-bp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanup()
+	if resolved != libDir {
+		t.Errorf("library resolved = %q, want %q", resolved, libDir)
+	}
+
+	// 3. Non-existent should fail
+	_, cleanup, err = resolveBlueprint("nonexistent-bp-xyz")
+	if err == nil {
+		cleanup()
+		t.Fatal("expected error for nonexistent blueprint")
+	}
+}
+
+func TestBlueprintApplyDefaultIsolation(t *testing.T) {
+	home := setupTestHome(t)
+
+	// Blueprint without isolation specified — should get defaults
+	bpDir := filepath.Join(home, "no-iso-bp")
+	os.MkdirAll(bpDir, 0755)
+	bp := blueprint{Name: "no-iso-rig"}
+	data, _ := json.MarshalIndent(bp, "", "  ")
+	os.WriteFile(filepath.Join(bpDir, "blueprint.json"), data, 0644)
+
+	err := cmdBlueprintApply([]string{bpDir, "--skip-plugins"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir, _ := rigDir("no-iso-rig")
+	cfg := loadRigConfig(dir)
+	if len(cfg.Isolate) != len(defaultIsolatedItems) {
+		t.Errorf("isolation = %d items, want %d (defaults)", len(cfg.Isolate), len(defaultIsolatedItems))
+	}
+}
+
+func TestCopyRealFiles(t *testing.T) {
+	tmp := t.TempDir()
+	src := filepath.Join(tmp, "src")
+	dst := filepath.Join(tmp, "dst")
+	os.MkdirAll(src, 0755)
+
+	// Real file
+	os.WriteFile(filepath.Join(src, "real.txt"), []byte("content"), 0644)
+
+	// Symlink
+	target := filepath.Join(tmp, "target.txt")
+	os.WriteFile(target, []byte("linked"), 0644)
+	os.Symlink(target, filepath.Join(src, "link.txt"))
+
+	err := copyRealFiles(src, dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	entries, _ := os.ReadDir(dst)
+	if len(entries) != 1 {
+		t.Errorf("copied %d files, want 1", len(entries))
+	}
+	if len(entries) > 0 && entries[0].Name() != "real.txt" {
+		t.Errorf("copied file = %q, want real.txt", entries[0].Name())
+	}
+
+	// Source dir doesn't exist — no error
+	err = copyRealFiles(filepath.Join(tmp, "nonexistent"), filepath.Join(tmp, "dst2"))
+	if err != nil {
+		t.Errorf("expected no error for missing src dir, got %v", err)
+	}
+}
+
+func TestLoadSaveBlueprint(t *testing.T) {
+	tmp := t.TempDir()
+
+	bp := blueprint{
+		Name:        "test",
+		Description: "Test blueprint",
+		Version:     "1",
+		Plugins:     []string{"npm:test/plugin"},
+		MCPServers:  map[string]any{"srv": map[string]any{"command": "cmd"}},
+		Settings:    map[string]any{"key": "value"},
+		Isolation:   []string{"conversations"},
+		Inherit:     []string{"skills"},
+		Args:        "--verbose",
+	}
+
+	err := saveBlueprint(tmp, bp)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := loadBlueprint(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if loaded.Name != bp.Name {
+		t.Errorf("name = %q, want %q", loaded.Name, bp.Name)
+	}
+	if loaded.Description != bp.Description {
+		t.Errorf("description = %q, want %q", loaded.Description, bp.Description)
+	}
+	if len(loaded.Plugins) != 1 || loaded.Plugins[0] != "npm:test/plugin" {
+		t.Errorf("plugins = %v", loaded.Plugins)
+	}
+	if loaded.Args != "--verbose" {
+		t.Errorf("args = %q, want --verbose", loaded.Args)
+	}
+}
+
+func TestBlueprintCreateFromFlag(t *testing.T) {
+	home := setupTestHome(t)
+	createTestRig(t, home, "from-rig")
+
+	// Don't set CLAUDE_CONFIG_DIR — use --from instead
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+
+	err := cmdBlueprintCreate([]string{"from-test", "--from", "from-rig"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bpDir, _ := blueprintDir("from-test")
+	bp, err := loadBlueprint(bpDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bp.Name != "from-test" {
+		t.Errorf("name = %q, want from-test", bp.Name)
+	}
+	if len(bp.Plugins) != 2 {
+		t.Errorf("plugins = %v, want 2", bp.Plugins)
+	}
+}
+
+func TestSyncPluginsDetectsVersionDrift(t *testing.T) {
+	home := setupTestHome(t)
+	rigDir := createRigDir(t, home, "testrig")
+
+	// Set up source plugins dir with a plugin at v1
+	sourceDir := filepath.Join(home, ".claude", "plugins")
+	v1Cache := filepath.Join(sourceDir, "cache", "market", "myplugin", "v1.0.0")
+	os.MkdirAll(v1Cache, 0755)
+	os.WriteFile(filepath.Join(v1Cache, "plugin.json"), []byte(`{}`), 0644)
+
+	srcManifest := pluginManifest{
+		Version: 2,
+		Plugins: map[string][]pluginEntry{
+			"myplugin@market": {{
+				Scope:        "user",
+				InstallPath:  v1Cache,
+				Version:      "1.0.0",
+				GitCommitSha: "aaa111",
+			}},
+		},
+	}
+	writePluginManifest(filepath.Join(sourceDir, "installed_plugins.json"), srcManifest)
+
+	// First sync — plugin gets added
+	synced, err := syncPlugins(rigDir, sourceDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(synced) != 1 || synced[0] != "myplugin@market" {
+		t.Fatalf("first sync: want [myplugin@market], got %v", synced)
+	}
+
+	// Verify v1 symlink exists in target
+	tgtV1 := filepath.Join(rigDir, "plugins", "cache", "market", "myplugin", "v1.0.0")
+	if _, err := os.Lstat(tgtV1); err != nil {
+		t.Fatalf("v1 symlink missing after first sync: %v", err)
+	}
+
+	// Source updates to v2
+	v2Cache := filepath.Join(sourceDir, "cache", "market", "myplugin", "v2.0.0")
+	os.MkdirAll(v2Cache, 0755)
+	os.WriteFile(filepath.Join(v2Cache, "plugin.json"), []byte(`{}`), 0644)
+
+	srcManifest.Plugins["myplugin@market"] = []pluginEntry{{
+		Scope:        "user",
+		InstallPath:  v2Cache,
+		Version:      "2.0.0",
+		GitCommitSha: "bbb222",
+	}}
+	writePluginManifest(filepath.Join(sourceDir, "installed_plugins.json"), srcManifest)
+
+	// Second sync — should detect version drift and update
+	synced2, _ := syncPlugins(rigDir, sourceDir)
+	// No NEW plugins synced (already registered), but manifest should be updated
+	if len(synced2) != 0 {
+		t.Errorf("second sync: want no new synced, got %v", synced2)
+	}
+
+	// Target manifest should now have v2
+	tgtManifest, err := readPluginManifest(filepath.Join(rigDir, "plugins", "installed_plugins.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := tgtManifest.Plugins["myplugin@market"]
+	if len(entries) == 0 {
+		t.Fatal("plugin missing from target manifest")
+	}
+	if entries[0].Version != "2.0.0" {
+		t.Errorf("version = %q, want %q", entries[0].Version, "2.0.0")
+	}
+	if entries[0].GitCommitSha != "bbb222" {
+		t.Errorf("sha = %q, want %q", entries[0].GitCommitSha, "bbb222")
+	}
+
+	// v2 symlink should exist
+	tgtV2 := filepath.Join(rigDir, "plugins", "cache", "market", "myplugin", "v2.0.0")
+	if _, err := os.Lstat(tgtV2); err != nil {
+		t.Errorf("v2 symlink missing: %v", err)
+	}
+
+	// v1 symlink should be cleaned up
+	if _, err := os.Lstat(tgtV1); err == nil {
+		t.Error("v1 symlink should have been removed after version update")
 	}
 }

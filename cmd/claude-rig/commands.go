@@ -28,6 +28,27 @@ type rigConfig struct {
 	SettingsOverrides []string          `json:"settings_overrides,omitempty"` // dot-paths protected from settings sync
 }
 
+// blueprint represents a declarative, shareable rig specification (blueprint.json).
+type blueprint struct {
+	Name         string                      `json:"name"`
+	Description  string                      `json:"description,omitempty"`
+	Version      string                      `json:"version,omitempty"`
+	Author       string                      `json:"author,omitempty"`
+	Created      string                      `json:"created,omitempty"`
+	Marketplaces map[string]blueprintMarket  `json:"marketplaces,omitempty"`
+	Plugins      []string                    `json:"plugins,omitempty"`
+	MCPServers   map[string]any              `json:"mcp_servers,omitempty"`
+	Settings     map[string]any              `json:"settings,omitempty"`
+	Isolation    []string                    `json:"isolation,omitempty"`
+	Inherit      []string                    `json:"inherit,omitempty"`
+	Args         string                      `json:"args,omitempty"`
+}
+
+type blueprintMarket struct {
+	Source string `json:"source"` // "github"
+	Repo   string `json:"repo"`   // "owner/repo"
+}
+
 // pluginManifest represents installed_plugins.json.
 type pluginManifest struct {
 	Version int                      `json:"version"`
@@ -481,6 +502,151 @@ func cmdSettingsOverride(args []string) error {
 
 	fmt.Printf("Rig %q: %s overridden locally (protected from sync)\n", rigName, key)
 	return nil
+}
+
+func loadBlueprint(dir string) (blueprint, error) {
+	data, err := os.ReadFile(filepath.Join(dir, "blueprint.json"))
+	if err != nil {
+		return blueprint{}, err
+	}
+	var bp blueprint
+	if err := json.Unmarshal(data, &bp); err != nil {
+		return blueprint{}, fmt.Errorf("parsing blueprint.json: %w", err)
+	}
+	if bp.Name == "" {
+		return blueprint{}, fmt.Errorf("blueprint.json missing required \"name\" field")
+	}
+	return bp, nil
+}
+
+func saveBlueprint(dir string, bp blueprint) error {
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(bp, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "blueprint.json"), append(data, '\n'), 0644)
+}
+
+// copyRealFiles copies regular files from srcDir to dstDir, skipping symlinks.
+// Creates dstDir if it doesn't exist. Walks one level deep (files only, no subdirs).
+func copyRealFiles(srcDir, dstDir string) error {
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	var hasFiles bool
+	for _, e := range entries {
+		if e.Type()&os.ModeSymlink != 0 {
+			continue // skip inherited symlinks
+		}
+		// Also check via Lstat for symlinks that ReadDir may report as regular
+		info, err := os.Lstat(filepath.Join(srcDir, e.Name()))
+		if err != nil || info.Mode()&os.ModeSymlink != 0 {
+			continue
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
+
+		if !hasFiles {
+			if err := os.MkdirAll(dstDir, 0755); err != nil {
+				return err
+			}
+			hasFiles = true
+		}
+
+		src := filepath.Join(srcDir, e.Name())
+		dst := filepath.Join(dstDir, e.Name())
+		content, err := os.ReadFile(src)
+		if err != nil {
+			return fmt.Errorf("reading %s: %w", e.Name(), err)
+		}
+		if err := os.WriteFile(dst, content, info.Mode().Perm()); err != nil {
+			return fmt.Errorf("writing %s: %w", e.Name(), err)
+		}
+	}
+	return nil
+}
+
+// resolveBlueprint resolves a blueprint source to a local directory path.
+// Returns the directory path and a cleanup function (non-nil for temp dirs).
+// Source resolution order:
+//  1. Local path (directory with blueprint.json)
+//  2. Local path (.tar.gz → extract to temp)
+//  3. Blueprint library (~/.claude-rig/blueprints/<name>/)
+//  4. GitHub (user/repo → shallow clone to temp)
+func resolveBlueprint(source string) (string, func(), error) {
+	noop := func() {}
+
+	// 1. Local directory
+	if info, err := os.Stat(source); err == nil && info.IsDir() {
+		if _, err := os.Stat(filepath.Join(source, "blueprint.json")); err == nil {
+			return source, noop, nil
+		}
+		return "", noop, fmt.Errorf("directory %s has no blueprint.json", source)
+	}
+
+	// 2. Local .tar.gz file
+	if _, err := os.Stat(source); err == nil && (strings.HasSuffix(source, ".tar.gz") || strings.HasSuffix(source, ".tgz")) {
+		tmpDir, err := os.MkdirTemp("", "claude-rig-blueprint-*")
+		if err != nil {
+			return "", noop, fmt.Errorf("creating temp dir: %w", err)
+		}
+		cleanup := func() { os.RemoveAll(tmpDir) }
+		if _, err := extractTarGz(source, tmpDir); err != nil {
+			cleanup()
+			return "", noop, fmt.Errorf("extracting archive: %w", err)
+		}
+		if _, err := os.Stat(filepath.Join(tmpDir, "blueprint.json")); err != nil {
+			cleanup()
+			return "", noop, fmt.Errorf("archive does not contain blueprint.json")
+		}
+		return tmpDir, cleanup, nil
+	}
+
+	// 3. Blueprint library
+	libDir, err := blueprintDir(source)
+	if err == nil {
+		if _, err := os.Stat(filepath.Join(libDir, "blueprint.json")); err == nil {
+			return libDir, noop, nil
+		}
+	}
+
+	// 4. GitHub (user/repo pattern)
+	if strings.Count(source, "/") == 1 && !strings.HasPrefix(source, ".") && !strings.HasPrefix(source, "/") {
+		tmpDir, err := os.MkdirTemp("", "claude-rig-blueprint-*")
+		if err != nil {
+			return "", noop, fmt.Errorf("creating temp dir: %w", err)
+		}
+		cleanup := func() { os.RemoveAll(tmpDir) }
+
+		cmd := exec.Command("gh", "repo", "clone", source, tmpDir, "--", "--depth", "1")
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			cleanup()
+			return "", noop, fmt.Errorf("cloning %s: %w", source, err)
+		}
+
+		// Look for blueprint.json in root, then .claude-rig/ subdirectory
+		if _, err := os.Stat(filepath.Join(tmpDir, "blueprint.json")); err == nil {
+			return tmpDir, cleanup, nil
+		}
+		subDir := filepath.Join(tmpDir, ".claude-rig")
+		if _, err := os.Stat(filepath.Join(subDir, "blueprint.json")); err == nil {
+			return subDir, cleanup, nil
+		}
+		cleanup()
+		return "", noop, fmt.Errorf("repository %s has no blueprint.json (checked root and .claude-rig/)", source)
+	}
+
+	return "", noop, fmt.Errorf("blueprint not found: %s", source)
 }
 
 // extractBundledPlugin writes the embedded plugin to ~/.claude-rig/bundled-plugin/
@@ -2950,6 +3116,51 @@ func cmdUpdatePlugins(args []string) error {
 				buf.WriteString(lastLine(out) + "\n")
 			}
 
+			// Update npm-sourced plugins: scan marketplaces for npm sources and
+			// run npm install in the npm-cache directory so Claude Code sees new versions.
+			// Uses the version range from marketplace.json so range bumps are picked up.
+			npmCacheDir := filepath.Join(dir, "plugins", "npm-cache")
+			if _, err := os.Stat(npmCacheDir); err == nil {
+				mpDir := filepath.Join(dir, "plugins", "marketplaces")
+				if mpEntries, err := os.ReadDir(mpDir); err == nil {
+					for _, mpe := range mpEntries {
+						mpJSON := filepath.Join(mpDir, mpe.Name(), ".claude-plugin", "marketplace.json")
+						mpData, err := os.ReadFile(mpJSON)
+						if err != nil {
+							continue
+						}
+						var mp struct {
+							Plugins []struct {
+								Source struct {
+									Source  string `json:"source"`
+									Package string `json:"package"`
+									Version string `json:"version"`
+								} `json:"source"`
+							} `json:"plugins"`
+						}
+						if json.Unmarshal(mpData, &mp) != nil {
+							continue
+						}
+						for _, p := range mp.Plugins {
+							if p.Source.Source == "npm" && p.Source.Package != "" {
+								spec := p.Source.Package
+								if p.Source.Version != "" {
+									spec += "@" + p.Source.Version
+								}
+								fmt.Fprintf(&buf, "  Updating npm package %s... ", spec)
+								cmd := exec.Command("npm", "install", spec)
+								cmd.Dir = npmCacheDir
+								if out, err := cmd.CombinedOutput(); err != nil {
+									fmt.Fprintf(&buf, "FAILED\n    %s\n", lastLine(strings.TrimSpace(string(out))))
+								} else {
+									buf.WriteString("ok\n")
+								}
+							}
+						}
+					}
+				}
+			}
+
 			// Get installed plugins
 			out, err := runClaudePlugin(claudeBin, dir, "list", "--json")
 			if err != nil {
@@ -3121,6 +3332,11 @@ func cmdPlugin(args []string) error {
 				fmt.Fprintf(os.Stderr, "warning: could not sync plugin MCP servers: %v\n", err)
 			}
 		}
+
+		// After uninstall, clean up synced_plugins tracking and orphaned cache symlinks
+		if pluginArgs[0] == "uninstall" {
+			cleanSyncedAfterUninstall(dir)
+		}
 	}
 
 	return nil
@@ -3187,6 +3403,79 @@ func cleanOrphanedInstalled(rigDir string) int {
 		return nil
 	})
 	return cleaned
+}
+
+// cleanSyncedAfterUninstall reconciles rig.json's synced_plugins list with the
+// current installed_plugins.json after a plugin uninstall. Removes entries from
+// synced_plugins that are no longer installed, and cleans up orphaned cache symlinks.
+func cleanSyncedAfterUninstall(rigDir string) {
+	cfg := loadRigConfig(rigDir)
+	if len(cfg.SyncedPlugins) == 0 {
+		return
+	}
+
+	manifest, err := readPluginManifest(filepath.Join(rigDir, "plugins", "installed_plugins.json"))
+	if err != nil {
+		manifest = pluginManifest{Plugins: make(map[string][]pluginEntry)}
+	}
+
+	var kept []string
+	var removed []string
+	for _, key := range cfg.SyncedPlugins {
+		if _, exists := manifest.Plugins[key]; exists {
+			kept = append(kept, key)
+		} else {
+			removed = append(removed, key)
+		}
+	}
+
+	if len(removed) == 0 {
+		return
+	}
+
+	// Clean orphaned cache symlinks for removed plugins
+	pluginsDir := filepath.Join(rigDir, "plugins")
+	for _, key := range removed {
+		// Plugin key format: "name@marketplace"
+		pluginName := key
+		marketplace := ""
+		if idx := strings.LastIndex(key, "@"); idx >= 0 {
+			pluginName = key[:idx]
+			marketplace = key[idx+1:]
+		}
+
+		// Remove cache symlink: cache/<marketplace>/<plugin>/ or cache/<plugin>/
+		var cacheDir string
+		if marketplace != "" {
+			cacheDir = filepath.Join(pluginsDir, "cache", marketplace, pluginName)
+		} else {
+			cacheDir = filepath.Join(pluginsDir, "cache", pluginName)
+		}
+
+		// Walk the cache dir looking for symlinks to remove
+		if entries, err := os.ReadDir(cacheDir); err == nil {
+			for _, e := range entries {
+				entryPath := filepath.Join(cacheDir, e.Name())
+				if info, err := os.Lstat(entryPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
+					os.Remove(entryPath)
+				}
+			}
+			// Clean up empty parent dirs up to plugins/cache/
+			cacheRoot := filepath.Join(pluginsDir, "cache")
+			dir := cacheDir
+			for dir != cacheRoot && dir != pluginsDir {
+				if entries, _ := os.ReadDir(dir); len(entries) == 0 {
+					os.Remove(dir)
+					dir = filepath.Dir(dir)
+				} else {
+					break
+				}
+			}
+		}
+	}
+
+	cfg.SyncedPlugins = kept
+	saveRigConfig(rigDir, cfg)
 }
 
 // lastLine returns the last non-empty line from s (result messages are typically last).
@@ -3397,6 +3686,7 @@ func syncPlugins(rigDir, sourcePluginsDir string) ([]string, error) {
 	srcEnabled, _ := srcSettings["enabledPlugins"].(map[string]any)
 
 	var synced []string
+	var updated int
 
 	for name, entries := range srcManifest.Plugins {
 		if len(entries) == 0 {
@@ -3440,6 +3730,29 @@ func syncPlugins(rigDir, sourcePluginsDir string) ([]string, error) {
 		}
 
 		if alreadyRegistered {
+			// Detect version drift: source has newer version than target
+			tgtEntries := tgtManifest.Plugins[name]
+			if len(tgtEntries) > 0 {
+				tgt := tgtEntries[0]
+				if entry.Version != tgt.Version || entry.GitCommitSha != tgt.GitCommitSha {
+					// Update manifest entry with new version
+					newEntry := entry
+					newEntry.InstallPath = tgtCachePath
+					tgtManifest.Plugins[name] = []pluginEntry{newEntry}
+
+					// Clean old version symlink if path changed
+					if tgt.InstallPath != tgtCachePath {
+						os.Remove(tgt.InstallPath)
+						// Remove empty parent dirs up to plugins/
+						for dir := filepath.Dir(tgt.InstallPath); dir != tgtPluginsDir; dir = filepath.Dir(dir) {
+							if err := os.Remove(dir); err != nil {
+								break
+							}
+						}
+					}
+					updated++
+				}
+			}
 			continue
 		}
 
@@ -3464,13 +3777,17 @@ func syncPlugins(rigDir, sourcePluginsDir string) ([]string, error) {
 	// A previous sync may have added the plugin but missed MCP extraction.
 	syncPluginMCP(rigDir)
 
-	if len(synced) == 0 {
+	if len(synced) == 0 && updated == 0 {
 		return nil, nil
 	}
 
-	// Write updated manifest
+	// Write updated manifest (new plugins or version updates)
 	if err := writePluginManifest(tgtManifestPath, tgtManifest); err != nil {
 		return synced, fmt.Errorf("writing plugin manifest: %w", err)
+	}
+
+	if updated > 0 {
+		fmt.Printf("  plugins — updated %d plugin(s) to newer version\n", updated)
 	}
 
 	// Merge enabledPlugins into target settings.json
@@ -4614,6 +4931,707 @@ func setDiff(a, b []string) (onlyA, onlyB []string) {
 		}
 	}
 	return
+}
+
+// --- Blueprint commands ---
+
+func cmdBlueprint(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: claude-rig blueprint <create|apply|inspect|list|pack> [arguments]")
+	}
+	switch args[0] {
+	case "create":
+		return cmdBlueprintCreate(args[1:])
+	case "apply":
+		return cmdBlueprintApply(args[1:])
+	case "inspect":
+		return cmdBlueprintInspect(args[1:])
+	case "list", "ls":
+		return cmdBlueprintList()
+	case "pack":
+		return cmdBlueprintPack(args[1:])
+	default:
+		return fmt.Errorf("unknown blueprint subcommand: %s", args[0])
+	}
+}
+
+func cmdBlueprintCreate(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: claude-rig blueprint create <name> [--from <rig>]")
+	}
+
+	var name, fromRig string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--from":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--from requires a rig name")
+			}
+			i++
+			fromRig = args[i]
+		default:
+			if name == "" {
+				name = args[i]
+			}
+		}
+	}
+	if name == "" {
+		return fmt.Errorf("usage: claude-rig blueprint create <name> [--from <rig>]")
+	}
+
+	if err := validateRigName(name); err != nil {
+		return fmt.Errorf("invalid blueprint name: %w", err)
+	}
+
+	// Determine source rig directory
+	var srcDir string
+	if fromRig != "" {
+		dir, err := rigDir(fromRig)
+		if err != nil {
+			return err
+		}
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			return fmt.Errorf("rig %q does not exist", fromRig)
+		}
+		srcDir = dir
+	} else {
+		// Use active rig from CLAUDE_CONFIG_DIR, then fall back to .claude-rig RC file
+		env := os.Getenv("CLAUDE_CONFIG_DIR")
+		if env != "" {
+			srcDir = env
+		} else {
+			rig, _, err := findRC()
+			if err != nil {
+				return err
+			}
+			if rig == "" {
+				return fmt.Errorf("no active rig — use --from <rig>, launch a rig, or run from a directory with .claude-rig")
+			}
+			dir, err := rigDir(rig)
+			if err != nil {
+				return err
+			}
+			if _, err := os.Stat(dir); os.IsNotExist(err) {
+				return fmt.Errorf("rig %q from .claude-rig does not exist", rig)
+			}
+			srcDir = dir
+		}
+	}
+
+	// Check if blueprint already exists
+	bpDir, err := blueprintDir(name)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(bpDir); err == nil {
+		return fmt.Errorf("blueprint %q already exists at %s", name, bpDir)
+	}
+
+	cfg := loadRigConfig(srcDir)
+
+	bp := blueprint{
+		Name:    name,
+		Created: time.Now().UTC().Format(time.RFC3339),
+	}
+
+	// Marketplaces — extract source info from known_marketplaces.json
+	marketsPath := filepath.Join(srcDir, "plugins", "known_marketplaces.json")
+	if marketsData, err := readJSONFile(marketsPath); err == nil {
+		markets := make(map[string]blueprintMarket)
+		for name, val := range marketsData {
+			entry, ok := val.(map[string]any)
+			if !ok {
+				continue
+			}
+			src, ok := entry["source"].(map[string]any)
+			if !ok {
+				continue
+			}
+			srcType, _ := src["source"].(string)
+			repo, _ := src["repo"].(string)
+			if srcType != "" && repo != "" {
+				markets[name] = blueprintMarket{Source: srcType, Repo: repo}
+			}
+		}
+		if len(markets) > 0 {
+			bp.Marketplaces = markets
+		}
+	}
+
+	// Plugins — extract keys from installed_plugins.json
+	manifestPath := filepath.Join(srcDir, "plugins", "installed_plugins.json")
+	if manifest, err := readPluginManifest(manifestPath); err == nil {
+		for key := range manifest.Plugins {
+			bp.Plugins = append(bp.Plugins, key)
+		}
+		sort.Strings(bp.Plugins)
+	}
+
+	// MCP servers — from .claude.json, excluding plugin-provided ones
+	claudeJSONPath := filepath.Join(srcDir, ".claude.json")
+	if claudeData, err := readJSONFile(claudeJSONPath); err == nil {
+		if servers, ok := claudeData["mcpServers"].(map[string]any); ok && len(servers) > 0 {
+			filtered := make(map[string]any)
+			for name, config := range servers {
+				if _, isPluginMCP := cfg.PluginMCP[name]; !isPluginMCP {
+					filtered[name] = config
+				}
+			}
+			if len(filtered) > 0 {
+				bp.MCPServers = filtered
+			}
+		}
+	}
+
+	// Settings
+	settingsPath := filepath.Join(srcDir, "settings.json")
+	if settings, err := readJSONFile(settingsPath); err == nil && len(settings) > 0 {
+		bp.Settings = settings
+	}
+
+	// Isolation
+	if len(cfg.Isolate) > 0 {
+		bp.Isolation = cfg.Isolate
+	}
+
+	// Inheritance
+	if len(cfg.Inherit) > 0 {
+		bp.Inherit = cfg.Inherit
+	}
+
+	// Args
+	argsFile := filepath.Join(srcDir, "default-args")
+	if data, err := os.ReadFile(argsFile); err == nil {
+		if s := strings.TrimSpace(string(data)); s != "" {
+			bp.Args = s
+		}
+	}
+
+	// Save blueprint.json
+	if err := saveBlueprint(bpDir, bp); err != nil {
+		return fmt.Errorf("saving blueprint: %w", err)
+	}
+
+	// Copy CLAUDE.md if non-empty
+	claudeMD := filepath.Join(srcDir, "CLAUDE.md")
+	if data, err := os.ReadFile(claudeMD); err == nil && len(strings.TrimSpace(string(data))) > 0 {
+		os.WriteFile(filepath.Join(bpDir, "CLAUDE.md"), data, 0644)
+	}
+
+	// Copy skills, agents, hooks, commands (real files only, skip symlinks)
+	copied := 0
+	for _, subdir := range []string{"skills", "agents", "hooks", "commands"} {
+		src := filepath.Join(srcDir, subdir)
+		dst := filepath.Join(bpDir, subdir)
+		if err := copyRealFiles(src, dst); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not copy %s: %v\n", subdir, err)
+			continue
+		}
+		if entries, err := os.ReadDir(dst); err == nil {
+			copied += len(entries)
+		}
+	}
+
+	// Print summary
+	fmt.Printf("Created blueprint %q at %s\n", name, bpDir)
+	parts := []string{}
+	if len(bp.Marketplaces) > 0 {
+		parts = append(parts, fmt.Sprintf("%d marketplace(s)", len(bp.Marketplaces)))
+	}
+	if len(bp.Plugins) > 0 {
+		parts = append(parts, fmt.Sprintf("%d plugin(s)", len(bp.Plugins)))
+	}
+	if len(bp.MCPServers) > 0 {
+		parts = append(parts, fmt.Sprintf("%d MCP server(s)", len(bp.MCPServers)))
+	}
+	if len(bp.Settings) > 0 {
+		parts = append(parts, fmt.Sprintf("%d setting(s)", len(flattenKeys(bp.Settings, ""))))
+	}
+	if copied > 0 {
+		parts = append(parts, fmt.Sprintf("%d skill/agent/hook/command file(s)", copied))
+	}
+	if len(parts) > 0 {
+		fmt.Printf("  Captured: %s\n", strings.Join(parts, ", "))
+	}
+	return nil
+}
+
+func cmdBlueprintApply(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: claude-rig blueprint apply <source> [--as <name>] [--link-auth] [--skip-plugins]")
+	}
+
+	var source, asName string
+	var linkAuth, skipPlugins bool
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--as":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--as requires a rig name")
+			}
+			i++
+			asName = args[i]
+		case "--link-auth":
+			linkAuth = true
+		case "--skip-plugins":
+			skipPlugins = true
+		default:
+			if source == "" {
+				source = args[i]
+			}
+		}
+	}
+	if source == "" {
+		return fmt.Errorf("usage: claude-rig blueprint apply <source> [--as <name>] [--link-auth] [--skip-plugins]")
+	}
+
+	// Resolve blueprint source
+	bpDir, cleanup, err := resolveBlueprint(source)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	bp, err := loadBlueprint(bpDir)
+	if err != nil {
+		return err
+	}
+
+	// Determine rig name
+	rigName := asName
+	if rigName == "" {
+		rigName = bp.Name
+	}
+	if err := validateRigName(rigName); err != nil {
+		return err
+	}
+
+	// Check rig doesn't already exist
+	dir, err := rigDir(rigName)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(dir); err == nil {
+		return fmt.Errorf("rig %q already exists", rigName)
+	}
+
+	root, err := rigsRoot()
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(root); os.IsNotExist(err) {
+		return fmt.Errorf("rig system not initialized — run: claude-rig init")
+	}
+
+	// Create rig directory with rig-specific items
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("creating rig directory: %w", err)
+	}
+	for _, item := range rigSpecificItems {
+		path := filepath.Join(dir, item)
+		switch {
+		case strings.HasSuffix(item, ".json"):
+			if err := os.WriteFile(path, []byte("{}\n"), 0644); err != nil {
+				os.RemoveAll(dir)
+				return fmt.Errorf("creating %s: %w", item, err)
+			}
+		case strings.HasSuffix(item, ".md"):
+			if err := os.WriteFile(path, []byte(""), 0644); err != nil {
+				os.RemoveAll(dir)
+				return fmt.Errorf("creating %s: %w", item, err)
+			}
+		default:
+			if err := os.MkdirAll(path, 0755); err != nil {
+				os.RemoveAll(dir)
+				return fmt.Errorf("creating %s/: %w", item, err)
+			}
+		}
+	}
+
+	// Seed .claude.json
+	if err := seedClaudeJSON(dir); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not seed .claude.json: %v\n", err)
+	}
+
+	// Apply isolation
+	isolateItems := bp.Isolation
+	if len(isolateItems) == 0 {
+		isolateItems = defaultIsolatedItems // use defaults if blueprint doesn't specify
+	}
+	if len(isolateItems) > 0 {
+		if err := applyIsolation(dir, isolateItems); err != nil {
+			os.RemoveAll(dir)
+			return fmt.Errorf("applying isolation: %w", err)
+		}
+	}
+
+	// Shared symlinks
+	if err := syncSharedSymlinks(dir); err != nil {
+		os.RemoveAll(dir)
+		return fmt.Errorf("creating shared symlinks: %w", err)
+	}
+
+	// Link auth
+	if linkAuth {
+		if err := linkAuthFiles(dir); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not link auth: %v\n", err)
+		} else {
+			fmt.Println("Linked auth from existing Claude config")
+		}
+	}
+
+	// Copy CLAUDE.md from blueprint
+	bpClaudeMD := filepath.Join(bpDir, "CLAUDE.md")
+	if data, err := os.ReadFile(bpClaudeMD); err == nil && len(strings.TrimSpace(string(data))) > 0 {
+		os.WriteFile(filepath.Join(dir, "CLAUDE.md"), data, 0644)
+	}
+
+	// Copy skills, agents, hooks, commands from blueprint
+	for _, subdir := range []string{"skills", "agents", "hooks", "commands"} {
+		src := filepath.Join(bpDir, subdir)
+		dst := filepath.Join(dir, subdir)
+		if err := copyRealFiles(src, dst); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not copy %s: %v\n", subdir, err)
+		}
+	}
+
+	// Apply settings
+	if len(bp.Settings) > 0 {
+		settingsPath := filepath.Join(dir, "settings.json")
+		existing, _ := readJSONFile(settingsPath)
+		if existing == nil {
+			existing = make(map[string]any)
+		}
+		for k, v := range bp.Settings {
+			existing[k] = v
+		}
+		if err := writeJSONFile(settingsPath, existing); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not write settings: %v\n", err)
+		}
+	}
+
+	// Configure MCP servers — write to .claude.json (where Claude Code reads them)
+	if len(bp.MCPServers) > 0 {
+		claudeJSONPath := filepath.Join(dir, ".claude.json")
+		claudeData, _ := readJSONFile(claudeJSONPath)
+		if claudeData == nil {
+			claudeData = map[string]any{}
+		}
+		servers, _ := claudeData["mcpServers"].(map[string]any)
+		if servers == nil {
+			servers = make(map[string]any)
+		}
+		for name, config := range bp.MCPServers {
+			servers[name] = config
+		}
+		claudeData["mcpServers"] = servers
+		if err := writeJSONFile(claudeJSONPath, claudeData); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not write MCP config: %v\n", err)
+		}
+	}
+
+	// Set inheritance
+	if len(bp.Inherit) > 0 {
+		cfg := loadRigConfig(dir)
+		cfg.Inherit = bp.Inherit
+		if err := saveRigConfig(dir, cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not save inheritance config: %v\n", err)
+		}
+		if err := syncGlobalContents(dir); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not sync inherited contents: %v\n", err)
+		}
+	}
+
+	// Set args
+	if bp.Args != "" {
+		argsFile := filepath.Join(dir, "default-args")
+		os.WriteFile(argsFile, []byte(bp.Args+"\n"), 0644)
+	}
+
+	// Install marketplaces and plugins
+	if (len(bp.Marketplaces) > 0 || len(bp.Plugins) > 0) && !skipPlugins {
+		claudeBin := claudeCodeBinary()
+		binPath, lookErr := exec.LookPath(claudeBin)
+		if lookErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: claude binary not found — skipping plugin installation\n")
+			fmt.Fprintf(os.Stderr, "  Install manually: %s\n", strings.Join(bp.Plugins, ", "))
+		} else {
+			// Register marketplaces first
+			if len(bp.Marketplaces) > 0 {
+				fmt.Printf("Registering %d marketplace(s)...\n", len(bp.Marketplaces))
+				for name, m := range bp.Marketplaces {
+					source := m.Repo
+					output, err := runClaudePlugin(binPath, dir, "marketplace", "add", source)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "  Warning: failed to add marketplace %s: %v\n", name, err)
+						if output != "" {
+							fmt.Fprintf(os.Stderr, "    %s\n", lastLine(output))
+						}
+					} else {
+						fmt.Printf("  Added marketplace %s\n", name)
+					}
+				}
+			}
+
+			// Install plugins
+			if len(bp.Plugins) > 0 {
+				fmt.Printf("Installing %d plugin(s)...\n", len(bp.Plugins))
+				for _, plugin := range bp.Plugins {
+					output, err := runClaudePlugin(binPath, dir, "install", plugin)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "  Warning: failed to install %s: %v\n", plugin, err)
+						if output != "" {
+							fmt.Fprintf(os.Stderr, "    %s\n", lastLine(output))
+						}
+					} else {
+						fmt.Printf("  Installed %s\n", plugin)
+					}
+				}
+			}
+		}
+	} else if len(bp.Plugins) > 0 {
+		fmt.Printf("Skipped %d plugin(s): %s\n", len(bp.Plugins), strings.Join(bp.Plugins, ", "))
+	}
+
+	// Apply default settings on top
+	if applied, err := syncDefaultSettings(dir); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not apply default settings: %v\n", err)
+	} else if len(applied) > 0 {
+		fmt.Printf("Applied %d default setting(s)\n", len(applied))
+	}
+
+	fmt.Printf("Created rig %q from blueprint %q\n", rigName, bp.Name)
+	fmt.Printf("Launch with: claude-rig launch %s\n", rigName)
+	return nil
+}
+
+func cmdBlueprintInspect(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: claude-rig blueprint inspect <source>")
+	}
+
+	bpDir, cleanup, err := resolveBlueprint(args[0])
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	bp, err := loadBlueprint(bpDir)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Blueprint: %s\n", bp.Name)
+	if bp.Description != "" {
+		fmt.Printf("  Description: %s\n", bp.Description)
+	}
+	if bp.Author != "" {
+		fmt.Printf("  Author: %s\n", bp.Author)
+	}
+	if bp.Version != "" {
+		fmt.Printf("  Version: %s\n", bp.Version)
+	}
+	if bp.Created != "" {
+		fmt.Printf("  Created: %s\n", bp.Created)
+	}
+
+	if len(bp.Marketplaces) > 0 {
+		fmt.Printf("\n  Marketplaces (%d):\n", len(bp.Marketplaces))
+		for name, m := range bp.Marketplaces {
+			fmt.Printf("    - %s (%s/%s)\n", name, m.Source, m.Repo)
+		}
+	}
+
+	if len(bp.Plugins) > 0 {
+		fmt.Printf("\n  Plugins (%d):\n", len(bp.Plugins))
+		for _, p := range bp.Plugins {
+			fmt.Printf("    - %s\n", p)
+		}
+	}
+
+	if len(bp.MCPServers) > 0 {
+		fmt.Printf("\n  MCP Servers (%d):\n", len(bp.MCPServers))
+		for name := range bp.MCPServers {
+			fmt.Printf("    - %s\n", name)
+		}
+	}
+
+	if len(bp.Settings) > 0 {
+		keys := flattenKeys(bp.Settings, "")
+		sort.Strings(keys)
+		fmt.Printf("\n  Settings (%d):\n", len(keys))
+		for _, k := range keys {
+			path := parseDotPath(k)
+			if v, ok := getNestedValue(bp.Settings, path); ok {
+				fmt.Printf("    %s = %v\n", k, v)
+			}
+		}
+	}
+
+	if len(bp.Isolation) > 0 {
+		fmt.Printf("\n  Isolation (%d): %s\n", len(bp.Isolation), strings.Join(bp.Isolation, ", "))
+	}
+	if len(bp.Inherit) > 0 {
+		fmt.Printf("  Inherit: %s\n", strings.Join(bp.Inherit, ", "))
+	}
+	if bp.Args != "" {
+		fmt.Printf("  Args: %s\n", bp.Args)
+	}
+
+	// Count files in subdirectories
+	for _, subdir := range []string{"skills", "agents", "hooks", "commands"} {
+		dir := filepath.Join(bpDir, subdir)
+		if entries, err := os.ReadDir(dir); err == nil && len(entries) > 0 {
+			fmt.Printf("  %s: %d file(s)\n", strings.ToUpper(subdir[:1])+subdir[1:], len(entries))
+		}
+	}
+
+	// CLAUDE.md preview
+	claudeMD := filepath.Join(bpDir, "CLAUDE.md")
+	if data, err := os.ReadFile(claudeMD); err == nil {
+		content := strings.TrimSpace(string(data))
+		if content != "" {
+			lines := strings.SplitN(content, "\n", 4)
+			fmt.Printf("\n  CLAUDE.md preview:\n")
+			for _, line := range lines[:min(len(lines), 3)] {
+				fmt.Printf("    %s\n", line)
+			}
+			if len(lines) > 3 {
+				fmt.Printf("    ...\n")
+			}
+		}
+	}
+
+	return nil
+}
+
+func cmdBlueprintList() error {
+	root, err := blueprintsRoot()
+	if err != nil {
+		return err
+	}
+
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Println("No blueprints found.")
+			return nil
+		}
+		return err
+	}
+
+	var found bool
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		bp, err := loadBlueprint(filepath.Join(root, e.Name()))
+		if err != nil {
+			continue
+		}
+		if !found {
+			fmt.Println("Blueprints:")
+			found = true
+		}
+		desc := ""
+		if bp.Description != "" {
+			desc = " — " + bp.Description
+		}
+		ver := ""
+		if bp.Version != "" {
+			ver = " (v" + bp.Version + ")"
+		}
+		fmt.Printf("  %s%s%s\n", bp.Name, ver, desc)
+	}
+
+	if !found {
+		fmt.Println("No blueprints found.")
+	}
+	return nil
+}
+
+func cmdBlueprintPack(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: claude-rig blueprint pack <name> [file]")
+	}
+
+	name := args[0]
+	bpDir, err := blueprintDir(name)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(filepath.Join(bpDir, "blueprint.json")); os.IsNotExist(err) {
+		return fmt.Errorf("blueprint %q not found", name)
+	}
+
+	destFile := name + ".blueprint.tar.gz"
+	if len(args) > 1 {
+		destFile = args[1]
+	}
+
+	// Create tar.gz of the blueprint directory
+	outFile, err := os.Create(destFile)
+	if err != nil {
+		return fmt.Errorf("creating output file: %w", err)
+	}
+	defer outFile.Close()
+
+	gw := gzip.NewWriter(outFile)
+	defer gw.Close()
+	tw := tar.NewWriter(gw)
+	defer tw.Close()
+
+	err = filepath.WalkDir(bpDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(bpDir, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+
+		header, err := tar.FileInfoHeader(info, "")
+		if err != nil {
+			return err
+		}
+		header.Name = rel
+
+		if err := tw.WriteHeader(header); err != nil {
+			return err
+		}
+
+		if !d.IsDir() {
+			f, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			_, err = io.Copy(tw, f)
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		os.Remove(destFile)
+		return fmt.Errorf("creating archive: %w", err)
+	}
+
+	// Flush writers before stat so the file size is accurate
+	tw.Close()
+	gw.Close()
+	outFile.Close()
+
+	info, _ := os.Stat(destFile)
+	fmt.Printf("Packed blueprint %q → %s (%s)\n", name, destFile, formatBytes(info.Size()))
+	return nil
 }
 
 func cmdVersions() error {

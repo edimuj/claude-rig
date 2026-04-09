@@ -1,4 +1,4 @@
-# Sync: Plugins, MCP, Settings & Versions
+# Sync, Settings & Versions
 
 The `sync` command keeps rigs aligned with global config across four dimensions: symlinks, inherited items, plugins, MCP servers, and default settings.
 
@@ -141,3 +141,4 @@ claude-rig unpin --rig staging
 ```
 
 When a rig is pinned, `launch` uses that exact binary instead of the latest. The auto-updater is also disabled for pinned rigs so a running session won't silently upgrade itself. Pinned rigs are not affected by `claude-rig update`, and you'll see a reminder about them after each update.
+

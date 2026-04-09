@@ -72,6 +72,7 @@ No interfaces, no packages, no abstractions. Functions call functions.
 | `plugin`         | `cmdPlugin`        | Forwards `claude plugin` to active rig; `--rig` to target other  |
 | `update-plugins` | `cmdUpdatePlugins` | Parallel across rigs, calls `claude plugin` CLI                  |
 | `settings`       | `cmdSettings`      | Manage default settings: `set/remove/list/override`; syncs to all rigs |
+| `blueprint`      | `cmdBlueprint`     | Dispatcher: `create/apply/inspect/list/pack` subcommands         |
 | `doctor`         | `cmdDoctor`        | Broken symlinks, inherited items, synced plugins/MCP health      |
 
 ## Adding a New Command
