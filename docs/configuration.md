@@ -5,8 +5,8 @@
 Each rig has its own `CLAUDE.md` for rig-specific instructions. Your global `~/.claude/CLAUDE.md` is always loaded alongside it — you don't lose your personal instructions when using a rig.
 
 ```
-~/.claude/CLAUDE.md                  ← Global instructions (always loaded)
-~/.claude-rig/rigs/webdev/CLAUDE.md  ← Rig-specific additions
+~/.claude/CLAUDE.md                  # global instructions (always loaded)
+~/.claude-rig/rigs/webdev/CLAUDE.md  # rig-specific additions
 ```
 
 This means you can give each rig its own personality, tool preferences, or coding conventions without duplicating your global setup.
@@ -36,9 +36,9 @@ The `.claude-rig` file contains one line (`rig=webdev`) and walks up the directo
 
 ```
 ~/projects/
-    my-webapp/.claude-rig    → rig=fullstack
-    cli-tool/.claude-rig     → rig=minimal
-    experiment/.claude-rig   → rig=sandbox
+    my-webapp/.claude-rig    -> rig=fullstack
+    cli-tool/.claude-rig     -> rig=minimal
+    experiment/.claude-rig   -> rig=sandbox
 ```
 
 ## Shell Integration

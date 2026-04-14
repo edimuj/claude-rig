@@ -43,9 +43,9 @@ Isolation config lives in `rig.json` inside the rig directory. When an item is i
 Skills, agents, hooks, and commands defined in `~/.claude/` can be inherited by any rig. This gives you a 3-layer configuration stack — just like how `CLAUDE.md` works:
 
 ```
-~/.claude/skills/                ← Global (inherited by rigs that opt in)
-~/.claude-rig/rigs/go/skills/    ← Rig-specific (overrides global by name)
-myproject/.claude/skills/        ← Project-level (native Claude Code discovery)
+~/.claude/skills/                # global (inherited by rigs that opt in)
+~/.claude-rig/rigs/go/skills/    # rig-specific (overrides global by name)
+myproject/.claude/skills/        # project-level (native Claude Code discovery)
 ```
 
 ```bash

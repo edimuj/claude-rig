@@ -14,7 +14,7 @@
 
 Claude Code keeps all configuration in a single `~/.claude/` directory. That's fine until you need:
 
-- **Multiple subscriptions** — Juggling 2–5 Max accounts? You have to log out and back in every time you switch. There's no way to run two subscriptions simultaneously.
+- **Multiple subscriptions** — Juggling 2-5 Max accounts? You have to log out and back in every time you switch. There's no way to run two subscriptions simultaneously.
 - **API and subscription side by side** — Want API access for one project and your Max subscription for another? Same problem — one config, one auth.
 - **Different tools per project** — Your web project needs Tailwind skills and a database MCP server. Your CLI tool needs none of that. But every Claude Code session loads the same plugins, the same MCP servers, the same hooks.
 - **Testing without risk** — Want to see if a new MCP server is eating your context window? You'd have to disable everything else, test, then re-enable. No way to isolate the experiment.
@@ -141,19 +141,45 @@ Each rig is a full config directory under `~/.claude-rig/rigs/<name>/`:
 
 ```
 ~/.claude-rig/rigs/webdev/
-    .claude.json            ← Real file (MCP servers, onboarding state)
-    CLAUDE.md               ← Real file (rig-specific instructions)
-    settings.json           ← Real file (rig-specific config)
-    rig.json                ← Isolation config, synced plugins/MCP, overrides
-    skills/                 ← Real directory
-    plugins/                ← Real directory (synced from global by default)
-    conversations/          ← Real dir (isolated by default)
-    history.jsonl           ← Real file (isolated by default)
-    telemetry/ → ~/.claude/ ← Symlink (shared by default)
+    .claude.json            # real file (MCP servers, onboarding state)
+    CLAUDE.md               # real file (rig-specific instructions)
+    settings.json           # real file (rig-specific config)
+    rig.json                # isolation config, synced plugins/MCP, overrides
+    skills/                 # real directory
+    plugins/                # real directory (synced from global by default)
+    conversations/          # real dir (isolated by default)
+    history.jsonl           # real file (isolated by default)
+    telemetry/ -> ~/.claude/ # symlink (shared by default)
     ...
 ```
 
 On `launch`, claude-rig resolves the binary (pinned or latest on disk), sets `CLAUDE_CONFIG_DIR` to the rig directory, loads global `~/.claude/CLAUDE.md` via `--add-dir`, refreshes symlinks, then replaces itself with Claude Code via `exec`. Two instances with different rigs run simultaneously without conflicts.
+
+## Blueprints — Share Your Setup
+
+You've spent hours dialing in your Claude Code setup. The right plugins, MCP servers, skills, settings, CLAUDE.md instructions. Then someone asks "what's your setup?" and you have... nothing. No way to export it. No way to share it. You end up writing a wall of text listing everything manually.
+
+Blueprints fix that. One command extracts your rig into a portable spec. Another command recreates it from scratch.
+
+```bash
+# Extract your setup
+claude-rig blueprint create my-setup --from go
+
+# Anyone can recreate it — from GitHub, a file, or a local directory
+claude-rig blueprint apply edimuj/my-setup --link-auth
+```
+
+Unlike `export`/`import` (which creates full file archives for backup), blueprints are lightweight specs. Plugins are listed as install references, not binary blobs. The whole thing is a small JSON file plus any custom skills or agents you've written. Push it to GitHub and your followers, teammates, or future self can spin up your exact setup in one command.
+
+**Use cases:**
+
+- Share your setup on social media — "here's the rig I use for all my Go projects"
+- Onboard new team members — one blueprint, everyone's on the same tools
+- Reproduce your setup on a new machine without remembering what you installed
+- Publish alongside a blog post or tutorial so readers can follow along with your exact config
+- Keep a library of blueprints for different types of work — web, mobile, data, DevOps
+
+See [docs/blueprints.md](docs/blueprints.md) for the full reference.
 
 ## Platform Support
 
@@ -168,7 +194,7 @@ On `launch`, claude-rig resolves the binary (pinned or latest on disk), sets `CL
 | Per-project RC files, shell integration, CLAUDE.md, templates | [docs/configuration.md](docs/configuration.md) |
 | Isolation model, configurable isolation, global inheritance | [docs/isolation.md](docs/isolation.md) |
 | Plugin sync, MCP sync, default settings, version management | [docs/sync.md](docs/sync.md) |
-| Blueprints — declarative, shareable rig specs | [docs/blueprints.md](docs/blueprints.md) |
+| Blueprints — share your Claude Code setup with anyone | [docs/blueprints.md](docs/blueprints.md) |
 | Export, import, status, diff | [docs/export-import.md](docs/export-import.md) |
 | Windows setup, known limitations | [docs/windows.md](docs/windows.md) |
 

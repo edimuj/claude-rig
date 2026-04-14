@@ -6,7 +6,7 @@ Portable `.tar.gz` archives for backup, machine migration, or sharing setups wit
 
 ```bash
 # Export a rig (settings, skills, plugins, agents, commands, hooks, MCP config)
-claude-rig export webdev                          # → webdev.tar.gz
+claude-rig export webdev                          # produces webdev.tar.gz
 claude-rig export webdev ~/backups/webdev.tar.gz  # explicit path
 claude-rig export webdev --include-auth           # include auth credentials
 claude-rig export webdev --include-data           # include isolated conversations/history

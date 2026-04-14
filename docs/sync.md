@@ -1,6 +1,6 @@
 # Sync, Settings & Versions
 
-The `sync` command keeps rigs aligned with global config across four dimensions: symlinks, inherited items, plugins, MCP servers, and default settings.
+The `sync` command keeps rigs aligned with global config: symlinks, inherited items, plugins, MCP servers, and default settings.
 
 ```bash
 # Sync everything for all rigs
@@ -118,9 +118,9 @@ claude-rig manages its own version resolution independently from the system `cla
 ```bash
 # See installed versions — * marks what unpinned rigs use
 claude-rig versions
-#   2.1.85  (symlink)     ← system symlink points here
+#   2.1.85  (symlink)     # system symlink points here
 #   2.1.91
-# * 2.1.92  (latest)      ← what unpinned rigs actually use
+# * 2.1.92  (latest)      # what unpinned rigs actually use
 
 # Update Claude Code (downloads new version, refreshes latest link)
 claude-rig update

@@ -4,7 +4,7 @@
 
 Windows requires **Developer Mode** enabled for symlink support. `claude-rig init` checks this automatically and fails fast with a clear message if symlinks aren't available.
 
-Enable Developer Mode: **Settings → System → For developers → Developer Mode → On**
+Enable Developer Mode: **Settings > System > For developers > Developer Mode > On**
 
 ## Shell Integration
 

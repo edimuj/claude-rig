@@ -1,14 +1,30 @@
 # Blueprints
 
-Blueprints are **declarative, shareable rig specifications** — dotfiles for AI coding. Where `export`/`import` creates a full backup (tar.gz of actual files), a blueprint says *what* a rig should have: which marketplaces to register, which plugins to install, which MCP servers to configure, what settings to use. Share a blueprint as a file, directory, or GitHub repo and anyone can recreate your rig in one command.
+## The Problem
+
+Right now, there's no good way to share a Claude Code setup. You've got your plugins, MCP servers, skills, custom agents, settings, CLAUDE.md instructions — all tuned over weeks of use. Then someone on X asks "what plugins do you use?" or a new teammate joins and needs the same tooling. Your options: write a long list of manual steps, or tell them to figure it out.
+
+Blueprints change that. A blueprint is a portable, declarative spec of your rig — dotfiles for AI coding. It captures *what* your rig has (not the binary data), so anyone can recreate it from scratch in one command.
 
 ```bash
-# Create a blueprint from your current rig
+# Extract your setup into a blueprint
 claude-rig blueprint create go-poweruser --from go
 
-# Share it — someone else runs:
+# Push to GitHub, share the link — anyone can recreate it:
 claude-rig blueprint apply edimuj/go-poweruser --link-auth
 ```
+
+### What you can do with blueprints
+
+- **Share your setup publicly** — Push to GitHub, drop the link on X/Reddit/your blog. Followers run one command and get your exact config
+- **Onboard teammates** — One blueprint per team role. New hire runs `blueprint apply` and they're set up in seconds, not hours
+- **Reproduce across machines** — Moving to a new laptop? Your blueprint library comes with you
+- **Pair with tutorials** — Writing a "how I use Claude Code for Go development" post? Include the blueprint so readers can follow along with your actual tools
+- **Maintain setup libraries** — Keep blueprints for different types of work (web, mobile, data, DevOps) and spin up purpose-built rigs as needed
+
+### Blueprint vs Export
+
+Blueprints are not backups. `export`/`import` creates a full tar.gz archive of your rig files — good for backup and migration, but heavy and not meant for sharing. Blueprints are small (a JSON manifest + any custom skill/agent files you wrote), and plugins are listed as install references rather than copied. Think of it like the difference between sharing a `package.json` vs zipping your entire `node_modules/`.
 
 ---
 
@@ -185,7 +201,7 @@ Pack a blueprint into a single `.tar.gz` file for sharing:
 
 ```bash
 claude-rig blueprint pack go-bp
-# → go-bp.blueprint.tar.gz
+# produces go-bp.blueprint.tar.gz
 
 claude-rig blueprint pack go-bp custom-name.tar.gz
 ```
@@ -218,7 +234,7 @@ claude-rig blueprint apply ./my-bp.blueprint.tar.gz --as my-rig --link-auth
 
 ---
 
-## Blueprint vs Export
+## Blueprint vs Export — Quick Reference
 
 | | Blueprint | Export |
 |---|---|---|
@@ -227,9 +243,7 @@ claude-rig blueprint apply ./my-bp.blueprint.tar.gz --as my-rig --link-auth
 | Plugins | Install references (installed fresh) | Binary data (copied) |
 | Marketplaces | Source repos (registered fresh) | Not included |
 | MCP servers | Config only | Config only |
-| Size | Tiny (KB) | Large (MB) |
+| Size | Small (KB) | Large (MB) |
 | Shareable | Yes (GitHub, file, directory) | Not really |
 | Auth data | Never included | Optional (`--include-auth`) |
 | Session data | Never included | Optional (`--include-data`) |
-
-Use **blueprints** when sharing setups with others or recreating rigs on new machines. Use **export/import** for full backups that preserve all rig state.
