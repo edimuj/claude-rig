@@ -290,6 +290,40 @@ func TestSyncSharedSymlinks(t *testing.T) {
 	}
 }
 
+func TestSyncSharedSymlinksCleansBrokenLinks(t *testing.T) {
+	home := setupTestHome(t)
+	claudeDir := filepath.Join(home, ".claude")
+	rigDir := createRigDir(t, home, "testrig")
+
+	os.MkdirAll(filepath.Join(claudeDir, "cache"), 0755)
+
+	// Create a valid shared symlink
+	os.Symlink(filepath.Join(claudeDir, "cache"), filepath.Join(rigDir, "cache"))
+
+	// Create a broken shared symlink (target removed from ~/.claude/)
+	os.Symlink(filepath.Join(claudeDir, "old-thing"), filepath.Join(rigDir, "old-thing"))
+
+	// Create a broken symlink pointing elsewhere
+	os.Symlink("/gone/external", filepath.Join(rigDir, "external"))
+
+	if err := syncSharedSymlinks(rigDir); err != nil {
+		t.Fatal(err)
+	}
+
+	// Valid symlink preserved
+	if _, err := os.Lstat(filepath.Join(rigDir, "cache")); err != nil {
+		t.Error("valid cache symlink should be preserved")
+	}
+	// Broken shared symlink removed
+	if _, err := os.Lstat(filepath.Join(rigDir, "old-thing")); err == nil {
+		t.Error("broken shared symlink should be removed")
+	}
+	// Broken external symlink removed
+	if _, err := os.Lstat(filepath.Join(rigDir, "external")); err == nil {
+		t.Error("broken external symlink should be removed")
+	}
+}
+
 func TestSyncSharedSymlinksSkipsIsolated(t *testing.T) {
 	home := setupTestHome(t)
 	claudeDir := filepath.Join(home, ".claude")

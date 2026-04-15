@@ -3571,6 +3571,9 @@ func cleanAuthBackups(rigDir string) {
 }
 
 func syncSharedSymlinks(rigDir string) error {
+	// Clean up broken symlinks before creating new ones
+	removeBrokenSymlinks(rigDir)
+
 	home, err := claudeHome()
 	if err != nil {
 		return err
