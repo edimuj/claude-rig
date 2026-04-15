@@ -1609,12 +1609,24 @@ func resolveArgsTarget(args []string) (dir string, rigName string, flagArgs []st
 	return d, rigName, flags
 }
 
-// cmdDoctor checks the health of the rig system.
-func cmdDoctor() error {
+// cmdDoctor checks the health of the rig system and optionally fixes issues.
+func cmdDoctor(args []string) error {
+	fix := false
+	for _, a := range args {
+		if a == "--fix" {
+			fix = true
+		}
+	}
+
 	issues := 0
+	fixed := 0
 	warn := func(format string, args ...any) {
 		issues++
 		fmt.Printf("  ✗ "+format+"\n", args...)
+	}
+	fixd := func(format string, args ...any) {
+		fixed++
+		fmt.Printf("  → fixed: "+format+"\n", args...)
 	}
 	ok := func(format string, args ...any) {
 		fmt.Printf("  ✓ "+format+"\n", args...)
@@ -1689,6 +1701,14 @@ func cmdDoctor() error {
 			path := filepath.Join(dir, item)
 			if _, err := os.Stat(path); os.IsNotExist(err) {
 				warn("Missing: %s", item)
+				if fix {
+					if strings.HasSuffix(item, ".json") || strings.HasSuffix(item, ".md") {
+						os.WriteFile(path, []byte(""), 0644)
+					} else {
+						os.MkdirAll(path, 0755)
+					}
+					fixd("created %s", item)
+				}
 			}
 		}
 
@@ -1713,11 +1733,19 @@ func cmdDoctor() error {
 			if err != nil {
 				warn("Unreadable symlink: %s", de.Name())
 				brokenLinks++
+				if fix {
+					os.Remove(path)
+					fixd("removed %s", de.Name())
+				}
 				continue
 			}
 			if _, err := os.Stat(target); os.IsNotExist(err) {
 				warn("Broken symlink: %s → %s", de.Name(), target)
 				brokenLinks++
+				if fix {
+					os.Remove(path)
+					fixd("removed %s", de.Name())
+				}
 			}
 		}
 
@@ -1730,13 +1758,17 @@ func cmdDoctor() error {
 		// Check inherited items: symlinks should resolve to non-empty targets
 		for _, item := range cfg.Inherit {
 			itemDir := filepath.Join(dir, item)
-			entries, err := os.ReadDir(itemDir)
+			inheritEntries, err := os.ReadDir(itemDir)
 			if err != nil {
 				warn("Inherited %s: directory missing", item)
+				if fix {
+					os.MkdirAll(itemDir, 0755)
+					fixd("created %s/", item)
+				}
 				continue
 			}
 			brokenInherited := 0
-			for _, entry := range entries {
+			for _, entry := range inheritEntries {
 				entryPath := filepath.Join(itemDir, entry.Name())
 				info, err := os.Lstat(entryPath)
 				if err != nil || info.Mode()&os.ModeSymlink == 0 {
@@ -1745,41 +1777,59 @@ func cmdDoctor() error {
 				target, err := os.Readlink(entryPath)
 				if err != nil {
 					brokenInherited++
+					if fix {
+						os.Remove(entryPath)
+						fixd("removed %s/%s", item, entry.Name())
+					}
 					continue
 				}
 				if _, err := os.Stat(target); os.IsNotExist(err) {
 					warn("Inherited %s/%s: broken symlink → %s", item, entry.Name(), target)
 					brokenInherited++
+					if fix {
+						os.Remove(entryPath)
+						fixd("removed %s/%s", item, entry.Name())
+					}
 				}
 			}
 			if brokenInherited == 0 {
-				ok("Inherited %s: %d entries", item, len(entries))
+				ok("Inherited %s: %d entries", item, len(inheritEntries))
 			}
 		}
 
 		// Check ALL installed plugins: cache, manifest, and marketplace consistency
 		tgtPluginsDir := filepath.Join(dir, "plugins")
-		manifest, err := readPluginManifest(filepath.Join(tgtPluginsDir, "installed_plugins.json"))
+		manifestPath := filepath.Join(tgtPluginsDir, "installed_plugins.json")
+		manifest, err := readPluginManifest(manifestPath)
 		if err == nil && len(manifest.Plugins) > 0 {
 			knownMP, _ := readJSONFile(filepath.Join(tgtPluginsDir, "known_marketplaces.json"))
 			brokenPlugins := 0
+			var removePlugins []string
 
 			for pluginKey, entries := range manifest.Plugins {
 				if len(entries) == 0 {
 					continue
 				}
 
+				pluginBroken := false
+
 				// Check cache exists and symlinks resolve
 				installPath := entries[0].InstallPath
 				if info, err := os.Lstat(installPath); err != nil {
 					warn("Plugin %s: cache missing: %s", pluginKey, installPath)
 					brokenPlugins++
+					pluginBroken = true
 				} else if info.Mode()&os.ModeSymlink != 0 {
 					target, _ := os.Readlink(installPath)
 					if _, err := os.Stat(target); os.IsNotExist(err) {
 						warn("Plugin %s: broken cache symlink → %s", pluginKey, target)
 						brokenPlugins++
+						pluginBroken = true
 					}
+				}
+
+				if pluginBroken && fix {
+					removePlugins = append(removePlugins, pluginKey)
 				}
 
 				// Check marketplace registration
@@ -1802,10 +1852,36 @@ func cmdDoctor() error {
 							if _, err := os.Stat(target); os.IsNotExist(err) {
 								warn("Plugin %s: broken marketplace symlink → %s", pluginKey, target)
 								brokenPlugins++
+								if fix {
+									os.Remove(mpDir)
+									fixd("removed broken marketplace symlink: %s", mpName)
+								}
 							}
 						}
 					}
 				}
+			}
+
+			// Remove broken plugins from manifest
+			if fix && len(removePlugins) > 0 {
+				for _, key := range removePlugins {
+					// Clean up cache symlink if it exists
+					if entries := manifest.Plugins[key]; len(entries) > 0 {
+						os.Remove(entries[0].InstallPath)
+					}
+					delete(manifest.Plugins, key)
+					// Also remove from rig.json synced_plugins
+					cfg.SyncedPlugins = removeFromSlice(cfg.SyncedPlugins, key)
+					// Also remove from plugin_mcp tracking
+					for server, plugin := range cfg.PluginMCP {
+						if plugin == key {
+							delete(cfg.PluginMCP, server)
+						}
+					}
+					fixd("removed plugin %s from manifest", key)
+				}
+				writePluginManifest(manifestPath, manifest)
+				saveRigConfig(dir, cfg)
 			}
 
 			if brokenPlugins == 0 {
@@ -1818,14 +1894,24 @@ func cmdDoctor() error {
 			claudeJSON, _ := readJSONFile(filepath.Join(dir, ".claude.json"))
 			mcpServers, _ := claudeJSON["mcpServers"].(map[string]any)
 			missingMCP := 0
+			var staleMCP []string
 			for _, serverName := range cfg.SyncedMCP {
 				if mcpServers == nil {
 					warn("Synced MCP %s: .claude.json has no mcpServers", serverName)
 					missingMCP++
+					staleMCP = append(staleMCP, serverName)
 				} else if _, exists := mcpServers[serverName]; !exists {
 					warn("Synced MCP %s: missing from .claude.json", serverName)
 					missingMCP++
+					staleMCP = append(staleMCP, serverName)
 				}
+			}
+			if fix && len(staleMCP) > 0 {
+				for _, s := range staleMCP {
+					cfg.SyncedMCP = removeFromSlice(cfg.SyncedMCP, s)
+					fixd("removed stale MCP tracking: %s", s)
+				}
+				saveRigConfig(dir, cfg)
 			}
 			if missingMCP == 0 {
 				ok("Synced MCP: %d servers ok", len(cfg.SyncedMCP))
@@ -1836,10 +1922,23 @@ func cmdDoctor() error {
 	fmt.Println()
 	if issues == 0 {
 		fmt.Println("No issues found.")
+	} else if fix {
+		fmt.Printf("Found %d issue(s), fixed %d.\n", issues, fixed)
 	} else {
-		fmt.Printf("Found %d issue(s).\n", issues)
+		fmt.Printf("Found %d issue(s). Run with --fix to auto-repair.\n", issues)
 	}
 	return nil
+}
+
+// removeFromSlice returns a new slice with all occurrences of val removed.
+func removeFromSlice(s []string, val string) []string {
+	var result []string
+	for _, v := range s {
+		if v != val {
+			result = append(result, v)
+		}
+	}
+	return result
 }
 
 // cmdInit sets up the rig system directory structure and shell integration.

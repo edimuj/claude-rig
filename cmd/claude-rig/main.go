@@ -104,7 +104,7 @@ func main() {
 	case "blueprint":
 		err = cmdBlueprint(args)
 	case "doctor":
-		err = cmdDoctor()
+		err = cmdDoctor(args)
 	case "versions":
 		err = cmdVersions()
 	case "pin":
@@ -198,7 +198,7 @@ Commands:
     inspect <source>       Preview blueprint contents
     list                   List local blueprints
     pack <name> [file]     Pack blueprint into .tar.gz for sharing
-  doctor                  Check rigs for broken symlinks and missing items
+  doctor [--fix]           Check rigs for broken symlinks and missing items
   init                    Initialize rig system (run once)
   version                 Show version
   help                    Show this help
