@@ -1429,7 +1429,7 @@ func syncGlobalContents(rigDir string) error {
 		localDir := filepath.Join(rigDir, item)
 
 		// Clean up stale symlinks first
-		removeStaleInheritedSymlinks(localDir, globalDir)
+		removeBrokenSymlinks(localDir)
 
 		// Read global entries
 		entries, err := os.ReadDir(globalDir)
@@ -1475,9 +1475,8 @@ func removeInheritedSymlinks(localDir, globalDir string) {
 	}
 }
 
-// removeStaleInheritedSymlinks removes symlinks pointing to entries in globalDir
-// that no longer exist.
-func removeStaleInheritedSymlinks(localDir, globalDir string) {
+// removeBrokenSymlinks removes any broken symlinks in localDir.
+func removeBrokenSymlinks(localDir string) {
 	entries, err := os.ReadDir(localDir)
 	if err != nil {
 		return
@@ -1488,16 +1487,8 @@ func removeStaleInheritedSymlinks(localDir, globalDir string) {
 		if err != nil || info.Mode()&os.ModeSymlink == 0 {
 			continue
 		}
-		target, err := os.Readlink(path)
-		if err != nil {
-			continue
-		}
-		// Only clean up symlinks pointing into the global dir
-		if !strings.HasPrefix(target, globalDir+string(os.PathSeparator)) {
-			continue
-		}
 		// Remove if target no longer exists
-		if _, err := os.Stat(target); os.IsNotExist(err) {
+		if _, err := os.Stat(path); os.IsNotExist(err) {
 			os.Remove(path)
 		}
 	}

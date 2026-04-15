@@ -407,7 +407,7 @@ func TestRemoveInheritedSymlinks(t *testing.T) {
 	}
 }
 
-func TestRemoveStaleInheritedSymlinks(t *testing.T) {
+func TestRemoveBrokenSymlinks(t *testing.T) {
 	home := setupTestHome(t)
 	claudeDir := filepath.Join(home, ".claude")
 	rigDir := createRigDir(t, home, "testrig")
@@ -421,18 +421,25 @@ func TestRemoveStaleInheritedSymlinks(t *testing.T) {
 	os.WriteFile(filepath.Join(globalSkills, "valid.md"), []byte("ok"), 0644)
 	os.Symlink(filepath.Join(globalSkills, "valid.md"), filepath.Join(localSkills, "valid.md"))
 
-	// Create a symlink to a file that does NOT exist (stale)
+	// Create a symlink to a file that does NOT exist (stale, pointing to global)
 	os.Symlink(filepath.Join(globalSkills, "gone.md"), filepath.Join(localSkills, "gone.md"))
 
-	removeStaleInheritedSymlinks(localSkills, globalSkills)
+	// Create a symlink to a file that does NOT exist (stale, pointing elsewhere)
+	os.Symlink("/some/other/path/external.md", filepath.Join(localSkills, "external.md"))
+
+	removeBrokenSymlinks(localSkills)
 
 	// Valid symlink preserved
 	if _, err := os.Lstat(filepath.Join(localSkills, "valid.md")); err != nil {
 		t.Error("valid symlink should be preserved")
 	}
-	// Stale symlink removed
+	// Stale symlink to global removed
 	if _, err := os.Lstat(filepath.Join(localSkills, "gone.md")); err == nil {
 		t.Error("stale symlink should be removed")
+	}
+	// Stale symlink to external path also removed
+	if _, err := os.Lstat(filepath.Join(localSkills, "external.md")); err == nil {
+		t.Error("stale external symlink should be removed")
 	}
 }
 
