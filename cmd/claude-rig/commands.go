@@ -1889,6 +1889,28 @@ func cmdDoctor(args []string) error {
 			}
 		}
 
+		// Check pinned version: binary should exist in preserved or Claude's versions dir
+		if cfg.ClaudeVersion != "" {
+			found := false
+			if pDir := pinnedVersionsDir(); pDir != "" {
+				if _, err := os.Stat(filepath.Join(pDir, cfg.ClaudeVersion)); err == nil {
+					found = true
+				}
+			}
+			if !found {
+				if vDir := claudeVersionsDir(); vDir != "" {
+					if _, err := os.Stat(filepath.Join(vDir, cfg.ClaudeVersion)); err == nil {
+						found = true
+					}
+				}
+			}
+			if found {
+				ok("Pinned version %s: binary found", cfg.ClaudeVersion)
+			} else {
+				warn("Pinned version %s: binary not found (will fall back to latest)", cfg.ClaudeVersion)
+			}
+		}
+
 		// Check synced MCP: servers still present in .claude.json
 		if len(cfg.SyncedMCP) > 0 {
 			claudeJSON, _ := readJSONFile(filepath.Join(dir, ".claude.json"))
@@ -2968,18 +2990,24 @@ func cmdLaunch(args []string) error {
 	binary := claudeCodeBinary()
 	var binPath string
 	if rigCfg.ClaudeVersion != "" {
-		vDir := claudeVersionsDir()
-		pinnedPath := ""
-		if vDir != "" {
-			pinnedPath = filepath.Join(vDir, rigCfg.ClaudeVersion)
-		}
-		if pinnedPath != "" {
-			if _, err := os.Stat(pinnedPath); err == nil {
-				binPath = pinnedPath
-				fmt.Fprintf(os.Stderr, "Using pinned Claude %s\n", rigCfg.ClaudeVersion)
+		// Check claude-rig preserved copy first, then Claude's versions dir
+		if pDir := pinnedVersionsDir(); pDir != "" {
+			p := filepath.Join(pDir, rigCfg.ClaudeVersion)
+			if _, err := os.Stat(p); err == nil {
+				binPath = p
 			}
 		}
 		if binPath == "" {
+			if vDir := claudeVersionsDir(); vDir != "" {
+				p := filepath.Join(vDir, rigCfg.ClaudeVersion)
+				if _, err := os.Stat(p); err == nil {
+					binPath = p
+				}
+			}
+		}
+		if binPath != "" {
+			fmt.Fprintf(os.Stderr, "Using pinned Claude %s\n", rigCfg.ClaudeVersion)
+		} else {
 			fmt.Fprintf(os.Stderr, "Warning: pinned version %s not found, falling back to latest on disk\n", rigCfg.ClaudeVersion)
 		}
 	}
@@ -5761,13 +5789,33 @@ func cmdVersions() error {
 		}
 	}
 
-	// Collect and sort versions (proper semver, not lexicographic)
-	var versions []string
+	// Collect versions from Claude's dir
+	versionSet := map[string]bool{}
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
-		versions = append(versions, e.Name())
+		versionSet[e.Name()] = true
+	}
+
+	// Collect preserved versions from claude-rig's dir
+	preservedSet := map[string]bool{}
+	if pDir := pinnedVersionsDir(); pDir != "" {
+		if pEntries, err := os.ReadDir(pDir); err == nil {
+			for _, e := range pEntries {
+				if e.IsDir() {
+					continue
+				}
+				preservedSet[e.Name()] = true
+				versionSet[e.Name()] = true
+			}
+		}
+	}
+
+	// Sort all versions (proper semver, not lexicographic)
+	var versions []string
+	for v := range versionSet {
+		versions = append(versions, v)
 	}
 	sort.Slice(versions, func(i, j int) bool {
 		return compareVersions(versions[i], versions[j]) < 0
@@ -5790,6 +5838,9 @@ func cmdVersions() error {
 		}
 		if v == symlink && v != latest {
 			line += "  (symlink)"
+		}
+		if preservedSet[v] {
+			line += "  (preserved)"
 		}
 		if rigs, ok := pinnedRigs[v]; ok {
 			line += fmt.Sprintf("  [pinned: %s]", strings.Join(rigs, ", "))
@@ -5888,6 +5939,22 @@ func cmdPin(args []string) error {
 		return err
 	}
 
+	// Copy binary to claude-rig-managed directory so Claude's updater can't remove it
+	pDir := pinnedVersionsDir()
+	if pDir == "" {
+		return fmt.Errorf("could not determine pinned versions directory")
+	}
+	preservedPath := filepath.Join(pDir, targetVersion)
+	if _, err := os.Stat(preservedPath); os.IsNotExist(err) {
+		if err := os.MkdirAll(pDir, 0755); err != nil {
+			return fmt.Errorf("creating versions directory: %w", err)
+		}
+		if err := copyFile(binPath, preservedPath); err != nil {
+			return fmt.Errorf("preserving version binary: %w", err)
+		}
+		fmt.Printf("Preserved binary to %s\n", preservedPath)
+	}
+
 	// Save to rig.json
 	cfg := loadRigConfig(dir)
 	cfg.ClaudeVersion = targetVersion
@@ -5906,6 +5973,24 @@ func cmdPin(args []string) error {
 	fmt.Printf("Pinned rig %q to Claude %s\n", rigName, targetVersion)
 	fmt.Println("Auto-updater disabled for this rig")
 	return nil
+}
+
+// copyFile copies src to dst, preserving executable permissions.
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Close()
 }
 
 func cmdUnpin(args []string) error {
@@ -5934,7 +6019,34 @@ func cmdUnpin(args []string) error {
 		fmt.Fprintf(os.Stderr, "Warning: could not re-enable auto-updater: %v\n", err)
 	}
 
-	fmt.Printf("Unpinned rig %q (was %s) — will use system default\n", rigName, oldVersion)
+	// Remove preserved binary if no other rig still pins this version
+	if pDir := pinnedVersionsDir(); pDir != "" {
+		preserved := filepath.Join(pDir, oldVersion)
+		if _, err := os.Stat(preserved); err == nil {
+			stillUsed := false
+			root, _ := rigsRoot()
+			if root != "" {
+				if entries, err := os.ReadDir(root); err == nil {
+					for _, e := range entries {
+						if !e.IsDir() || e.Name() == rigName {
+							continue
+						}
+						other := loadRigConfig(filepath.Join(root, e.Name()))
+						if other.ClaudeVersion == oldVersion {
+							stillUsed = true
+							break
+						}
+					}
+				}
+			}
+			if !stillUsed {
+				os.Remove(preserved)
+				fmt.Printf("Removed preserved binary %s\n", preserved)
+			}
+		}
+	}
+
+	fmt.Printf("Unpinned rig %q (was %s) -- will use system default\n", rigName, oldVersion)
 	fmt.Println("Auto-updater re-enabled for this rig")
 	return nil
 }

@@ -142,3 +142,5 @@ claude-rig unpin --rig staging
 
 When a rig is pinned, `launch` uses that exact binary instead of the latest. The auto-updater is also disabled for pinned rigs so a running session won't silently upgrade itself. Pinned rigs are not affected by `claude-rig update`, and you'll see a reminder about them after each update.
 
+Pinned binaries are copied to `~/.claude-rig/versions/` so they survive Claude Code's own cleanup of old versions. When you unpin, the preserved copy is automatically removed (unless another rig still pins the same version). `claude-rig versions` shows preserved copies and `doctor` warns if a pinned binary goes missing.
+

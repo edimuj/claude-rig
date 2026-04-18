@@ -219,6 +219,16 @@ func claudeCodeBinary() string {
 	return "claude"
 }
 
+// pinnedVersionsDir returns the claude-rig-managed directory for preserved pinned binaries.
+// Returns ~/.claude-rig/versions/ (created on demand by cmdPin).
+func pinnedVersionsDir() string {
+	base, err := rigHome()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(base, "versions")
+}
+
 // claudeVersionsDir discovers the directory containing Claude Code version binaries
 // by following the symlink from the claude binary (e.g. ~/.local/bin/claude →
 // ~/.local/share/claude/versions/2.1.92 → parent dir).
