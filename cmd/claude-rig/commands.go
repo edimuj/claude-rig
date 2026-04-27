@@ -1696,6 +1696,41 @@ func cmdDoctor(args []string) error {
 
 		fmt.Printf("\nRig %q:\n", name)
 
+		// Check auth files are symlinked to global
+		globalHome, _ := globalClaudeHome()
+		for _, item := range authItems {
+			authPath := filepath.Join(dir, item)
+			globalPath := filepath.Join(globalHome, item)
+			info, err := os.Lstat(authPath)
+			if err != nil {
+				continue
+			}
+			if info.Mode()&os.ModeSymlink != 0 {
+				target, _ := os.Readlink(authPath)
+				if target == globalPath {
+					ok("Auth %s: linked to global", item)
+				} else {
+					warn("Auth %s: linked to %s (not global)", item, target)
+					if fix {
+						os.Remove(authPath)
+						if err := os.Symlink(globalPath, authPath); err == nil {
+							fixd("relinked %s → global", item)
+						}
+					}
+				}
+			} else {
+				warn("Auth %s: local copy (will go stale on re-login)", item)
+				if fix {
+					if _, err := os.Stat(globalPath); err == nil {
+						os.RemoveAll(authPath)
+						if err := os.Symlink(globalPath, authPath); err == nil {
+							fixd("linked %s → global", item)
+						}
+					}
+				}
+			}
+		}
+
 		// Check rig-specific items exist
 		for _, item := range rigSpecificItems {
 			path := filepath.Join(dir, item)
@@ -2748,7 +2783,7 @@ func cmdSync(args []string) error {
 	}
 
 	var names []string
-	var noPlugins, noMCP, noInherit, noSettings bool
+	var noPlugins, noMCP, noInherit, noSettings, noAuth bool
 	var fromRig string
 	for _, a := range args {
 		switch a {
@@ -2760,6 +2795,8 @@ func cmdSync(args []string) error {
 			noInherit = true
 		case "--no-settings":
 			noSettings = true
+		case "--no-auth":
+			noAuth = true
 		default:
 			if strings.HasPrefix(a, "--from=") {
 				fromRig = strings.TrimPrefix(a, "--from=")
@@ -2823,9 +2860,43 @@ func cmdSync(args []string) error {
 		fmt.Printf("Source: rig %q\n", fromRig)
 	}
 
+	// Determine auth source directory
+	authSourceDir := home
+	if fromRig != "" {
+		fromDir, _ := rigDir(fromRig)
+		authSourceDir = fromDir
+	}
+
 	for _, name := range names {
 		dir, _ := rigDir(name)
 		cfg := loadRigConfig(dir)
+
+		// 0. Auth files — re-link if already symlinked or convert copies
+		if !noAuth {
+			for _, item := range authItems {
+				authPath := filepath.Join(dir, item)
+				target := filepath.Join(authSourceDir, item)
+				if _, err := os.Stat(target); os.IsNotExist(err) {
+					continue
+				}
+				info, err := os.Lstat(authPath)
+				if err != nil {
+					continue
+				}
+				if info.Mode()&os.ModeSymlink != 0 {
+					dest, _ := os.Readlink(authPath)
+					if dest != target {
+						os.Remove(authPath)
+						os.Symlink(target, authPath)
+						fmt.Printf("  %s — relinked auth %s\n", name, item)
+					}
+				} else {
+					os.RemoveAll(authPath)
+					os.Symlink(target, authPath)
+					fmt.Printf("  %s — linked auth %s\n", name, item)
+				}
+			}
+		}
 
 		// 1. Shared symlinks
 		if err := syncSharedSymlinks(dir); err != nil {

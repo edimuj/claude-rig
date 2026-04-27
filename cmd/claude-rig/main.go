@@ -160,12 +160,13 @@ Commands:
   list                    List all rigs (* = running sessions)
   delete <name>           Delete a rig
   rename <old> <new>      Rename a rig
-  sync [rig]              Sync symlinks, inherited items, plugins, MCP, settings (all rigs if none given)
+  sync [rig]              Sync auth, symlinks, inherited items, plugins, MCP, settings (all rigs if none given)
+    --no-auth              Skip auth re-linking
     --no-plugins           Skip plugin sync
     --no-mcp               Skip MCP server sync
     --no-inherit           Skip inherited items sync
     --no-settings          Skip default settings sync
-    --from <rig>           Use another rig as plugin/MCP source instead of global
+    --from <rig>           Use another rig as source instead of global
   update                  Update Claude Code (forwards to claude update)
   versions                List available Claude Code versions on disk
   pin <version>           Pin rig to a specific Claude Code version (--rig <name>)
