@@ -2921,6 +2921,9 @@ func cmdSync(args []string) error {
 				saveRigConfig(dir, cfg)
 				fmt.Printf("  %s — synced %d plugin(s)\n", name, len(synced))
 			}
+			if removed := removeOrphanedVersions(dir); removed > 0 {
+				fmt.Printf("  %s — removed %d orphaned plugin version(s)\n", name, removed)
+			}
 		}
 
 		// 4. MCP servers
@@ -3056,6 +3059,11 @@ func cmdLaunch(args []string) error {
 		fmt.Fprintf(os.Stderr, "Warning: could not sync inherited contents: %v\n", err)
 	}
 
+	// Remove orphaned plugin versions so Claude Code doesn't fire their hooks
+	if n := removeOrphanedVersions(dir); n > 0 {
+		fmt.Fprintf(os.Stderr, "Cleaned %d orphaned plugin version(s)\n", n)
+	}
+
 	// Resolve binary: pinned version → latest on disk → system symlink fallback
 	rigCfg := loadRigConfig(dir)
 	binary := claudeCodeBinary()
@@ -3134,6 +3142,11 @@ func cmdLaunch(args []string) error {
 		fmt.Fprintf(os.Stderr, "Warning: could not extract bundled plugin: %v\n", err)
 	} else {
 		extraArgs = append(extraArgs, "--plugin-dir", pluginDir)
+	}
+
+	// Set terminal title to "claude (project)" for clean VS Code tabs
+	if wd, err := os.Getwd(); err == nil {
+		fmt.Fprintf(os.Stderr, "\033]0;claude (%s)\007", filepath.Base(wd))
 	}
 
 	execArgs := append([]string{binary}, defaultArgs...)
@@ -3395,6 +3408,9 @@ func cmdUpdatePlugins(args []string) error {
 			if cleaned := cleanOrphanedInstalled(dir); cleaned > 0 {
 				fmt.Fprintf(&buf, "  Cleaned %d stale orphan markers\n", cleaned)
 			}
+			if removed := removeOrphanedVersions(dir); removed > 0 {
+				fmt.Fprintf(&buf, "  Removed %d orphaned version dir(s)\n", removed)
+			}
 
 			// Reconcile plugin MCP servers in .mcp.json
 			if err := syncPluginMCP(dir); err != nil {
@@ -3592,6 +3608,67 @@ func cleanOrphanedInstalled(rigDir string) int {
 		return nil
 	})
 	return cleaned
+}
+
+// removeOrphanedVersions deletes plugin cache version directories that have an
+// .orphaned_at marker and are NOT referenced by installed_plugins.json.
+// This prevents Claude Code's loader from firing hooks on dead versions.
+func removeOrphanedVersions(rigDir string) int {
+	installedPath := filepath.Join(rigDir, "plugins", "installed_plugins.json")
+	data, err := os.ReadFile(installedPath)
+	if err != nil {
+		return 0
+	}
+
+	var manifest struct {
+		Plugins map[string][]struct {
+			InstallPath string `json:"installPath"`
+		} `json:"plugins"`
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return 0
+	}
+
+	activePaths := make(map[string]bool)
+	for _, entries := range manifest.Plugins {
+		for _, e := range entries {
+			if e.InstallPath != "" {
+				p := e.InstallPath
+				// Resolve symlinks so we match both the symlink and its target
+				if resolved, err := filepath.EvalSymlinks(p); err == nil {
+					activePaths[resolved] = true
+				}
+				activePaths[p] = true
+			}
+		}
+	}
+
+	removed := 0
+	cacheDir := filepath.Join(rigDir, "plugins", "cache")
+	_ = filepath.WalkDir(cacheDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || d.Name() != ".orphaned_at" {
+			return nil
+		}
+		versionDir := filepath.Dir(path)
+		resolved := versionDir
+		if r, err := filepath.EvalSymlinks(versionDir); err == nil {
+			resolved = r
+		}
+		if activePaths[versionDir] || activePaths[resolved] {
+			return nil // active version, don't touch
+		}
+		if os.RemoveAll(versionDir) == nil {
+			removed++
+			// Clean empty parent dirs up to cache/
+			for dir := filepath.Dir(versionDir); dir != cacheDir; dir = filepath.Dir(dir) {
+				if err := os.Remove(dir); err != nil {
+					break
+				}
+			}
+		}
+		return nil
+	})
+	return removed
 }
 
 // cleanSyncedAfterUninstall reconciles rig.json's synced_plugins list with the
