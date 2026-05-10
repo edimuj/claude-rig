@@ -99,6 +99,8 @@ func main() {
 		err = cmdImport(args)
 	case "plugin":
 		err = cmdPlugin(args)
+	case "config":
+		err = cmdConfig(args)
 	case "settings":
 		err = cmdSettings(args)
 	case "blueprint":
@@ -188,6 +190,12 @@ Commands:
   status [rig]            Show rig status (disk, sessions, last used)
   plugin <subcommand>     Run claude plugin commands on active rig (--rig <name>)
   update-plugins [rigs]   Update marketplace plugins (all rigs if none given)
+                          -j N  concurrent rigs (default 2)
+  config <subcommand>     Manage claude-rig preferences (~/.claude-rig/config.json)
+    set <key> <value>      Set a preference (e.g., update_plugins.concurrency 4)
+    get <key>              Get a preference value
+    remove <key>           Remove a preference
+    list                   Show all preferences
   settings <subcommand>   Manage default settings applied to all rigs
     set <key> <value>      Set a default and apply to all rigs immediately
     remove <key>           Remove a default and strip from all rigs

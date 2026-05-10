@@ -114,6 +114,7 @@ claude-rig          # picks up the rig automatically
 |---|---|
 | `blueprint <sub>` | Shareable rig specs: `create`, `apply`, `inspect`, `list`, `pack` |
 | `clone <src\|default> <dest>` | Clone a rig or `~/.claude/` config |
+| `config <sub>` | Manage claude-rig preferences (`set`, `get`, `remove`, `list`) |
 | `create <name>` | Create a new rig (`--link-auth`, `--no-isolate-defaults`, `--isolate-all`) |
 | `delete <name>` | Delete a rig |
 | `diff <rig1> <rig2>` | Compare two rigs |
@@ -141,7 +142,7 @@ claude-rig          # picks up the rig automatically
 | `unlink-auth <name>` | Remove shared auth |
 | `unpin` | Remove version pin |
 | `update` | Update Claude Code |
-| `update-plugins [rigs]` | Update marketplace plugins across rigs |
+| `update-plugins [-j N] [rigs]` | Update marketplace plugins across rigs (default: 2 concurrent) |
 | `versions` | List installed Claude Code versions on disk |
 
 ## How It Works

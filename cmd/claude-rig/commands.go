@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -304,7 +305,153 @@ func parseJSONValue(s string) any {
 	return s
 }
 
-// --- Settings commands ---
+// --- Global config (claude-rig's own preferences in ~/.claude-rig/config.json) ---
+
+func loadGlobalConfig() (map[string]any, error) {
+	path := globalConfigPath()
+	if path == "" {
+		return nil, fmt.Errorf("could not determine rig home")
+	}
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return make(map[string]any), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+func saveGlobalConfig(m map[string]any) error {
+	path := globalConfigPath()
+	if path == "" {
+		return fmt.Errorf("could not determine rig home")
+	}
+	data, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(data, '\n'), 0644)
+}
+
+func getGlobalConfigInt(key string, fallback int) int {
+	cfg, err := loadGlobalConfig()
+	if err != nil {
+		return fallback
+	}
+	val, ok := getNestedValue(cfg, parseDotPath(key))
+	if !ok {
+		return fallback
+	}
+	switch v := val.(type) {
+	case float64:
+		return int(v)
+	case string:
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return fallback
+}
+
+func cmdConfig(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: claude-rig config <set|get|remove|list> ...")
+	}
+	switch args[0] {
+	case "set":
+		return cmdConfigSet(args[1:])
+	case "get":
+		return cmdConfigGet(args[1:])
+	case "remove":
+		return cmdConfigRemove(args[1:])
+	case "list":
+		return cmdConfigList()
+	default:
+		return fmt.Errorf("unknown config subcommand %q\nUsage: claude-rig config <set|get|remove|list>", args[0])
+	}
+}
+
+func cmdConfigSet(args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: claude-rig config set <key> <value>")
+	}
+	key := args[0]
+	value := strings.Join(args[1:], " ")
+
+	cfg, err := loadGlobalConfig()
+	if err != nil {
+		return err
+	}
+
+	setNestedValue(cfg, parseDotPath(key), parseJSONValue(value))
+	if err := saveGlobalConfig(cfg); err != nil {
+		return err
+	}
+	fmt.Printf("Set %s\n", key)
+	return nil
+}
+
+func cmdConfigGet(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: claude-rig config get <key>")
+	}
+	key := args[0]
+
+	cfg, err := loadGlobalConfig()
+	if err != nil {
+		return err
+	}
+
+	val, ok := getNestedValue(cfg, parseDotPath(key))
+	if !ok {
+		return fmt.Errorf("key %q not set", key)
+	}
+	data, _ := json.MarshalIndent(val, "", "  ")
+	fmt.Println(string(data))
+	return nil
+}
+
+func cmdConfigRemove(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: claude-rig config remove <key>")
+	}
+	key := args[0]
+
+	cfg, err := loadGlobalConfig()
+	if err != nil {
+		return err
+	}
+
+	if !deleteNestedValue(cfg, parseDotPath(key)) {
+		return fmt.Errorf("key %q not found", key)
+	}
+	if err := saveGlobalConfig(cfg); err != nil {
+		return err
+	}
+	fmt.Printf("Removed %s\n", key)
+	return nil
+}
+
+func cmdConfigList() error {
+	cfg, err := loadGlobalConfig()
+	if err != nil {
+		return err
+	}
+	if len(cfg) == 0 {
+		fmt.Println("No configuration set.")
+		return nil
+	}
+	data, _ := json.MarshalIndent(cfg, "", "  ")
+	fmt.Println(string(data))
+	return nil
+}
+
+// --- Settings commands (Claude Code settings synced to rigs) ---
 
 func cmdSettings(args []string) error {
 	if len(args) == 0 {
@@ -3261,6 +3408,29 @@ func cmdUpdatePlugins(args []string) error {
 		return err
 	}
 
+	// Parse -j flag for concurrency limit (default from config, fallback 2)
+	concurrency := getGlobalConfigInt("update_plugins.concurrency", 2)
+	var filteredArgs []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-j" && i+1 < len(args) {
+			n, err := strconv.Atoi(args[i+1])
+			if err != nil || n < 1 {
+				return fmt.Errorf("invalid concurrency value: %s", args[i+1])
+			}
+			concurrency = n
+			i++
+		} else if strings.HasPrefix(args[i], "-j") {
+			n, err := strconv.Atoi(args[i][2:])
+			if err != nil || n < 1 {
+				return fmt.Errorf("invalid concurrency value: %s", args[i][2:])
+			}
+			concurrency = n
+		} else {
+			filteredArgs = append(filteredArgs, args[i])
+		}
+	}
+	args = filteredArgs
+
 	// Determine which rigs to update
 	var rigNames []string
 	if len(args) > 0 {
@@ -3292,15 +3462,18 @@ func cmdUpdatePlugins(args []string) error {
 		failed bool
 	}
 
-	fmt.Printf("Updating %d rigs: %s ...\n", len(rigNames), strings.Join(rigNames, ", "))
+	fmt.Printf("Updating %d rigs (%d at a time): %s ...\n", len(rigNames), concurrency, strings.Join(rigNames, ", "))
 
 	results := make([]rigResult, len(rigNames))
 	var wg sync.WaitGroup
+	sem := make(chan struct{}, concurrency)
 
 	for i, name := range rigNames {
 		wg.Add(1)
 		go func(idx int, rigName string) {
 			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
 			dir := filepath.Join(root, rigName)
 			var buf strings.Builder
 			var failed bool
