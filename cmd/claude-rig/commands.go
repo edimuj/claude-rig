@@ -3301,6 +3301,44 @@ func cmdLaunch(args []string) error {
 	return execLaunch(binPath, execArgs, env)
 }
 
+// cmdPassthrough forwards a claude subcommand (e.g. "agents") through the
+// rig launch pipeline. Accepts an optional rig name, otherwise resolves
+// from the RC file. The claude subcommand and any remaining args are
+// forwarded to the claude binary.
+func cmdPassthrough(claudeCmd string, args []string) error {
+	var rigName string
+	var extra []string
+
+	// Check for --rig <name> flag
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--rig" && i+1 < len(args) {
+			rigName = args[i+1]
+			extra = append(args[:i:i], args[i+2:]...)
+			break
+		}
+	}
+
+	if rigName == "" && len(args) >= 1 && !strings.HasPrefix(args[0], "-") {
+		rigName = args[0]
+		extra = args[1:]
+	}
+
+	if rigName == "" {
+		rig, _, err := findRC()
+		if err != nil {
+			return err
+		}
+		if rig == "" {
+			return fmt.Errorf("no rig specified and no .claude-rig file found\nUsage: claude-rig %s [rig-name] [args...]", claudeCmd)
+		}
+		rigName = rig
+		extra = args
+	}
+
+	launchArgs := append([]string{rigName, claudeCmd}, extra...)
+	return cmdLaunch(launchArgs)
+}
+
 // findRC walks from cwd up to $HOME looking for a .claude-rig file.
 func findRC() (rig string, path string, err error) {
 	home, err := os.UserHomeDir()

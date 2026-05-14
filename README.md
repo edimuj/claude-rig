@@ -112,6 +112,7 @@ claude-rig          # picks up the rig automatically
 
 | Command | Description |
 |---|---|
+| `agents [rig] [args]` | Launch Claude Code in agents (orchestrator) mode |
 | `blueprint <sub>` | Shareable rig specs: `create`, `apply`, `inspect`, `list`, `pack` |
 | `clone <src\|default> <dest>` | Clone a rig or `~/.claude/` config |
 | `config <sub>` | Manage claude-rig preferences (`set`, `get`, `remove`, `list`) |

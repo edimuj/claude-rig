@@ -113,6 +113,8 @@ func main() {
 		err = cmdPin(args)
 	case "unpin":
 		err = cmdUnpin(args)
+	case "agents":
+		err = cmdPassthrough("agents", args)
 	case "version", "--version", "-v":
 		fmt.Printf("claude-rig %s\n", getVersion())
 	case "help", "--help", "-h":
@@ -207,6 +209,7 @@ Commands:
     inspect <source>       Preview blueprint contents
     list                   List local blueprints
     pack <name> [file]     Pack blueprint into .tar.gz for sharing
+  agents [rig] [args]      Launch Claude Code in agents (orchestrator) mode
   doctor [--fix]           Check rigs for broken symlinks and missing items
   init                    Initialize rig system (run once)
   version                 Show version
@@ -223,6 +226,8 @@ Examples:
   claude-rig rc minimal              # Bind current directory to a rig
   claude-rig                         # Auto-launch from .claude-rig file
   claude-rig --resume <id>           # Auto-launch and forward flags to claude
+  claude-rig agents                  # Launch agents (orchestrator) mode
+  claude-rig agents webappdev        # Launch agents mode with specific rig
 
 Shell integration (add to ~/.bashrc or ~/.zshrc):
   alias claude-minimal='claude-rig launch minimal'
