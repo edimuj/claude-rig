@@ -3276,19 +3276,22 @@ func cmdLaunch(args []string) error {
 		os.WriteFile(claudeMD, []byte(""), 0644)
 	}
 
+	// Rig-injected flags go before user args (subcommands like "agents" live in extraArgs)
+	var rigFlags []string
+
 	// Always load global ~/.claude/ CLAUDE.md via --add-dir
 	userHome, _ := os.UserHomeDir()
 	if userHome != "" {
 		canonicalClaudeHome := filepath.Join(userHome, ".claude")
 		env = setEnv(env, "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD", "1")
-		extraArgs = append(extraArgs, "--add-dir", canonicalClaudeHome)
+		rigFlags = append(rigFlags, "--add-dir", canonicalClaudeHome)
 	}
 
 	// Extract and load bundled plugin (skills/agents shipped with claude-rig)
 	if pluginDir, err := extractBundledPlugin(); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: could not extract bundled plugin: %v\n", err)
 	} else {
-		extraArgs = append(extraArgs, "--plugin-dir", pluginDir)
+		rigFlags = append(rigFlags, "--plugin-dir", pluginDir)
 	}
 
 	// Set terminal title to "claude (project)" for clean VS Code tabs
@@ -3297,6 +3300,7 @@ func cmdLaunch(args []string) error {
 	}
 
 	execArgs := append([]string{binary}, defaultArgs...)
+	execArgs = append(execArgs, rigFlags...)
 	execArgs = append(execArgs, extraArgs...)
 	return execLaunch(binPath, execArgs, env)
 }
