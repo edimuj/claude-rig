@@ -85,7 +85,6 @@ func rigDir(name string) (string, error) {
 	return filepath.Join(root, name), nil
 }
 
-
 // isolatableItems are shared items that can optionally be isolated per rig.
 // Everything else in ~/.claude/ that isn't rig-specific or hidden gets symlinked.
 var isolatableItems = []string{

@@ -20,29 +20,29 @@ import (
 
 // rigConfig holds per-rig configuration stored in rig.json.
 type rigConfig struct {
-	Isolate       []string          `json:"isolate,omitempty"`
-	Inherit       []string          `json:"inherit,omitempty"`
-	SyncedPlugins []string          `json:"synced_plugins,omitempty"`
-	SyncedMCP     []string          `json:"synced_mcp,omitempty"`
-	PluginMCP     map[string]string `json:"plugin_mcp,omitempty"`     // MCP server name → plugin key
-	ClaudeVersion     string            `json:"claude_version,omitempty"`      // pinned Claude Code binary version
+	Isolate           []string          `json:"isolate,omitempty"`
+	Inherit           []string          `json:"inherit,omitempty"`
+	SyncedPlugins     []string          `json:"synced_plugins,omitempty"`
+	SyncedMCP         []string          `json:"synced_mcp,omitempty"`
+	PluginMCP         map[string]string `json:"plugin_mcp,omitempty"`         // MCP server name → plugin key
+	ClaudeVersion     string            `json:"claude_version,omitempty"`     // pinned Claude Code binary version
 	SettingsOverrides []string          `json:"settings_overrides,omitempty"` // dot-paths protected from settings sync
 }
 
 // blueprint represents a declarative, shareable rig specification (blueprint.json).
 type blueprint struct {
-	Name         string                      `json:"name"`
-	Description  string                      `json:"description,omitempty"`
-	Version      string                      `json:"version,omitempty"`
-	Author       string                      `json:"author,omitempty"`
-	Created      string                      `json:"created,omitempty"`
-	Marketplaces map[string]blueprintMarket  `json:"marketplaces,omitempty"`
-	Plugins      []string                    `json:"plugins,omitempty"`
-	MCPServers   map[string]any              `json:"mcp_servers,omitempty"`
-	Settings     map[string]any              `json:"settings,omitempty"`
-	Isolation    []string                    `json:"isolation,omitempty"`
-	Inherit      []string                    `json:"inherit,omitempty"`
-	Args         string                      `json:"args,omitempty"`
+	Name         string                     `json:"name"`
+	Description  string                     `json:"description,omitempty"`
+	Version      string                     `json:"version,omitempty"`
+	Author       string                     `json:"author,omitempty"`
+	Created      string                     `json:"created,omitempty"`
+	Marketplaces map[string]blueprintMarket `json:"marketplaces,omitempty"`
+	Plugins      []string                   `json:"plugins,omitempty"`
+	MCPServers   map[string]any             `json:"mcp_servers,omitempty"`
+	Settings     map[string]any             `json:"settings,omitempty"`
+	Isolation    []string                   `json:"isolation,omitempty"`
+	Inherit      []string                   `json:"inherit,omitempty"`
+	Args         string                     `json:"args,omitempty"`
 }
 
 type blueprintMarket struct {
@@ -4225,7 +4225,7 @@ func seedClaudeJSON(rigDir string) error {
 	// Read global .claude.json for seed fields
 	globalPath := filepath.Join(userHome, ".claude.json")
 	seed := map[string]any{
-		"hasCompletedOnboarding":                true,
+		"hasCompletedOnboarding":                  true,
 		"officialMarketplaceAutoInstallAttempted": true,
 		"officialMarketplaceAutoInstalled":        true,
 		"mcpServers":                              map[string]any{},
@@ -4552,8 +4552,8 @@ func syncPluginMCP(rigDir string) error {
 	cfg := loadRigConfig(rigDir)
 
 	// Collect all MCP servers from installed plugins' plugin.json
-	wantMCP := make(map[string]any)       // server name → config
-	wantTrack := make(map[string]string)   // server name → plugin key
+	wantMCP := make(map[string]any)      // server name → config
+	wantTrack := make(map[string]string) // server name → plugin key
 	for pluginKey, entries := range manifest.Plugins {
 		if len(entries) == 0 {
 			continue
