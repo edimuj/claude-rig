@@ -125,10 +125,10 @@ claude-rig          # picks up the rig automatically
 | `inherit <items> [rig]` | Inherit global skills/agents/hooks/commands |
 | `init` | Initialize claude-rig and install shell integration |
 | `isolate <rig> <items>` | Isolate items per rig |
-| `isolation [rig]` | Show isolation status for one or all rigs |
+| `isolation [rig]` | Show isolation status for one or all rigs (`--json`) |
 | `launch [name] [args]` | Launch Claude Code with a rig |
 | `link-auth <name>` | Link rig to shared auth |
-| `list` | List all rigs (`*` = running sessions) |
+| `list` | List all rigs (`*` = running sessions; `--json` for machine output) |
 | `pin <version>` | Pin rig to a specific Claude Code version |
 | `plugin <subcommand>` | Run `claude plugin` commands on the correct rig |
 | `rc [name]` | Show or create `.claude-rig` file for current directory |
@@ -137,7 +137,7 @@ claude-rig          # picks up the rig automatically
 | `settings <sub>` | Manage default settings applied to all rigs |
 | `share <rig> <items>` | Reverse isolation |
 | `show-args [name]` | Show default launch args |
-| `status [rig]` | Show rig status: disk, sessions, last used |
+| `status [rig]` | Show rig status: disk, sessions, last used (`--json`) |
 | `sync [rig]` | Sync symlinks, inherited items, plugins, MCP, settings |
 | `uninherit <items> [rig]` | Stop inheriting |
 | `unlink-auth <name>` | Remove shared auth |

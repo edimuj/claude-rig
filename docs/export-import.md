@@ -52,6 +52,24 @@ Rig: go
   Path:       /home/user/.claude-rig/rigs/go
 ```
 
+Add `--json` to either form for machine-readable output (scripting, automation). `claude-rig list --json` and `claude-rig isolation --json` work the same way:
+
+```bash
+$ claude-rig status go --json
+{
+  "name": "go",
+  "auth": "linked",
+  "plugins": 5,
+  "mcp": 1,
+  "isolated": [],
+  "disk_real_bytes": 45056,
+  "disk_symlink_bytes": 451,
+  "sessions": [12345, 67890],
+  "last_used": "2026-05-30T08:08:44Z",
+  "path": "/home/user/.claude-rig/rigs/go"
+}
+```
+
 ---
 
 ## Rig Diff

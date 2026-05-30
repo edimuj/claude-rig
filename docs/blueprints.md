@@ -103,6 +103,9 @@ claude-rig blueprint create my-blueprint
 
 # From a named rig
 claude-rig blueprint create go-bp --from go
+
+# Keep secret env vars in the blueprint (off by default)
+claude-rig blueprint create go-bp --from go --include-secrets
 ```
 
 **What gets captured:**
@@ -118,6 +121,13 @@ claude-rig blueprint create go-bp --from go
 - **Skills, agents, hooks, commands** — real files only (inherited symlinks are skipped)
 
 Blueprints are stored in `~/.claude-rig/blueprints/<name>/`.
+
+### Secrets and portability
+
+Blueprints are meant to be shared, so `create` sanitizes them by default:
+
+- **Secret env vars are redacted.** Any `settings.env` key ending in `_TOKEN`, `_KEY`, `_SECRET`, or `_PASSWORD`, or containing `OAUTH`/`CREDENTIAL`, is stripped and listed in the summary. Pass `--include-secrets` to keep them (e.g. a private blueprint for your own machines).
+- **Host paths are templatized.** Absolute paths in settings and MCP server configs are replaced with `${RIG_DIR}`, `${CLAUDE_RIG_ROOT}`, `${CLAUDE_DIR}`, and `${HOME}` (most specific first). `apply` expands them back to the target host's real paths, so a blueprint created on one machine works on another without manual fixups.
 
 ---
 
