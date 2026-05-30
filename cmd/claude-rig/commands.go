@@ -2932,33 +2932,29 @@ func cmdSync(args []string) error {
 	var names []string
 	var noPlugins, noMCP, noInherit, noSettings, noAuth bool
 	var fromRig string
-	for _, a := range args {
-		switch a {
-		case "--no-plugins":
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--no-plugins":
 			noPlugins = true
-		case "--no-mcp":
+		case a == "--no-mcp":
 			noMCP = true
-		case "--no-inherit":
+		case a == "--no-inherit":
 			noInherit = true
-		case "--no-settings":
+		case a == "--no-settings":
 			noSettings = true
-		case "--no-auth":
+		case a == "--no-auth":
 			noAuth = true
-		default:
-			if strings.HasPrefix(a, "--from=") {
-				fromRig = strings.TrimPrefix(a, "--from=")
-			} else if a == "--from" {
-				// handled below with next arg
-			} else if fromRig == "" && len(names) == 0 && !strings.HasPrefix(a, "-") {
-				// Could be rig name or --from value
-				names = append(names, a)
+		case strings.HasPrefix(a, "--from="):
+			fromRig = strings.TrimPrefix(a, "--from=")
+		case a == "--from":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--from requires a rig name")
 			}
-		}
-	}
-	// Handle --from <value> (two-arg form)
-	for i, a := range args {
-		if a == "--from" && i+1 < len(args) {
-			fromRig = args[i+1]
+			i++
+			fromRig = args[i]
+		case !strings.HasPrefix(a, "-") && len(names) == 0:
+			names = append(names, a)
 		}
 	}
 
@@ -5439,12 +5435,87 @@ func cmdBlueprint(args []string) error {
 	}
 }
 
+type pathReplacement struct {
+	prefix   string
+	template string
+}
+
+func templatizePaths(v any, replacements []pathReplacement) any {
+	switch val := v.(type) {
+	case string:
+		for _, r := range replacements {
+			if r.prefix == "" {
+				continue // empty prefix would inject the token between every char
+			}
+			val = strings.ReplaceAll(val, r.prefix, r.template)
+		}
+		return val
+	case map[string]any:
+		result := make(map[string]any, len(val))
+		for k, child := range val {
+			result[k] = templatizePaths(child, replacements)
+		}
+		return result
+	case []any:
+		result := make([]any, len(val))
+		for i, child := range val {
+			result[i] = templatizePaths(child, replacements)
+		}
+		return result
+	default:
+		return v
+	}
+}
+
+func expandTemplatePaths(v any, expansions []pathReplacement) any {
+	switch val := v.(type) {
+	case string:
+		for _, e := range expansions {
+			if e.template == "" {
+				continue
+			}
+			val = strings.ReplaceAll(val, e.template, e.prefix)
+		}
+		return val
+	case map[string]any:
+		result := make(map[string]any, len(val))
+		for k, child := range val {
+			result[k] = expandTemplatePaths(child, expansions)
+		}
+		return result
+	case []any:
+		result := make([]any, len(val))
+		for i, child := range val {
+			result[i] = expandTemplatePaths(child, expansions)
+		}
+		return result
+	default:
+		return v
+	}
+}
+
+func isSecretEnvVar(name string) bool {
+	upper := strings.ToUpper(name)
+	for _, suffix := range []string{"_TOKEN", "_KEY", "_SECRET", "_PASSWORD"} {
+		if strings.HasSuffix(upper, suffix) {
+			return true
+		}
+	}
+	for _, substr := range []string{"OAUTH", "CREDENTIAL"} {
+		if strings.Contains(upper, substr) {
+			return true
+		}
+	}
+	return false
+}
+
 func cmdBlueprintCreate(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: claude-rig blueprint create <name> [--from <rig>]")
+		return fmt.Errorf("usage: claude-rig blueprint create <name> [--from <rig>] [--include-secrets]")
 	}
 
 	var name, fromRig string
+	var includeSecrets bool
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--from":
@@ -5453,6 +5524,8 @@ func cmdBlueprintCreate(args []string) error {
 			}
 			i++
 			fromRig = args[i]
+		case "--include-secrets":
+			includeSecrets = true
 		default:
 			if name == "" {
 				name = args[i]
@@ -5460,7 +5533,7 @@ func cmdBlueprintCreate(args []string) error {
 		}
 	}
 	if name == "" {
-		return fmt.Errorf("usage: claude-rig blueprint create <name> [--from <rig>]")
+		return fmt.Errorf("usage: claude-rig blueprint create <name> [--from <rig>] [--include-secrets]")
 	}
 
 	if err := validateRigName(name); err != nil {
@@ -5569,7 +5642,22 @@ func cmdBlueprintCreate(args []string) error {
 
 	// Settings
 	settingsPath := filepath.Join(srcDir, "settings.json")
+	var redactedSecrets []string
 	if settings, err := readJSONFile(settingsPath); err == nil && len(settings) > 0 {
+		if !includeSecrets {
+			if envMap, ok := settings["env"].(map[string]any); ok {
+				for k := range envMap {
+					if isSecretEnvVar(k) {
+						redactedSecrets = append(redactedSecrets, k)
+						delete(envMap, k)
+					}
+				}
+				sort.Strings(redactedSecrets)
+				if len(envMap) == 0 {
+					delete(settings, "env")
+				}
+			}
+		}
 		bp.Settings = settings
 	}
 
@@ -5589,6 +5677,23 @@ func cmdBlueprintCreate(args []string) error {
 		if s := strings.TrimSpace(string(data)); s != "" {
 			bp.Args = s
 		}
+	}
+
+	// Templatize host-specific paths for portability (most specific first)
+	homeDir, _ := os.UserHomeDir()
+	claudeDir := filepath.Join(homeDir, ".claude")
+	rigsRootDir, _ := rigsRoot()
+	pathReplacements := []pathReplacement{
+		{srcDir, "${RIG_DIR}"},
+		{rigsRootDir, "${CLAUDE_RIG_ROOT}"},
+		{claudeDir, "${CLAUDE_DIR}"},
+		{homeDir, "${HOME}"},
+	}
+	if bp.Settings != nil {
+		bp.Settings = templatizePaths(bp.Settings, pathReplacements).(map[string]any)
+	}
+	if bp.MCPServers != nil {
+		bp.MCPServers = templatizePaths(bp.MCPServers, pathReplacements).(map[string]any)
 	}
 
 	// Save blueprint.json
@@ -5636,6 +5741,10 @@ func cmdBlueprintCreate(args []string) error {
 	}
 	if len(parts) > 0 {
 		fmt.Printf("  Captured: %s\n", strings.Join(parts, ", "))
+	}
+	if len(redactedSecrets) > 0 {
+		fmt.Printf("  Redacted %d secret(s): %s\n", len(redactedSecrets), strings.Join(redactedSecrets, ", "))
+		fmt.Printf("  Use --include-secrets to include them\n")
 	}
 	return nil
 }
@@ -5705,6 +5814,22 @@ func cmdBlueprintApply(args []string) error {
 	}
 	if _, err := os.Stat(root); os.IsNotExist(err) {
 		return fmt.Errorf("rig system not initialized — run: claude-rig init")
+	}
+
+	// Expand template paths for this host
+	homeDir, _ := os.UserHomeDir()
+	claudeDir := filepath.Join(homeDir, ".claude")
+	pathExpansions := []pathReplacement{
+		{dir, "${RIG_DIR}"},
+		{root, "${CLAUDE_RIG_ROOT}"},
+		{claudeDir, "${CLAUDE_DIR}"},
+		{homeDir, "${HOME}"},
+	}
+	if bp.Settings != nil {
+		bp.Settings = expandTemplatePaths(bp.Settings, pathExpansions).(map[string]any)
+	}
+	if bp.MCPServers != nil {
+		bp.MCPServers = expandTemplatePaths(bp.MCPServers, pathExpansions).(map[string]any)
 	}
 
 	// Create rig directory with rig-specific items

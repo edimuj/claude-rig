@@ -204,7 +204,7 @@ Commands:
     list                   Show current default settings
     override <key> <value> [--rig <name>]  Pin a per-rig value (survives sync)
   blueprint <subcommand>  Shareable rig specifications
-    create <name>          Create blueprint from active rig (--from <rig>)
+    create <name>          Create blueprint from active rig (--from <rig>, --include-secrets)
     apply <source>         Create rig from blueprint (--as <name>, --link-auth, --skip-plugins)
     inspect <source>       Preview blueprint contents
     list                   List local blueprints

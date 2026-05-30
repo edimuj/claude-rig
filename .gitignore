@@ -23,4 +23,5 @@ CLAUDE.md
 # Claude-Rig file
 .claude-rig
 share
+share/
 claude-rig.exe

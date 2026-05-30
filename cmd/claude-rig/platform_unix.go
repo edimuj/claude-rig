@@ -125,7 +125,7 @@ func rigRunningSessions(dir string) []int {
 	if err != nil {
 		return nil
 	}
-	needle := []byte("CLAUDE_CONFIG_DIR=" + dir)
+	needle := "CLAUDE_CONFIG_DIR=" + dir
 	var pids []int
 	for _, p := range procs {
 		if !p.IsDir() {
@@ -147,15 +147,21 @@ func rigRunningSessions(dir string) []int {
 		if err != nil {
 			continue
 		}
-		if bytesContains(env, needle) {
+		if environHasVar(env, needle) {
 			pids = append(pids, pid)
 		}
 	}
 	return pids
 }
 
-// bytesContains checks if haystack contains needle (for null-separated /proc environ).
-func bytesContains(haystack, needle []byte) bool {
-	return len(needle) > 0 && len(haystack) >= len(needle) &&
-		strings.Contains(string(haystack), string(needle))
+// environHasVar reports whether the NUL-separated /proc environ buffer contains
+// an entry exactly equal to needle. Exact-entry matching avoids false positives
+// where one rig dir is a prefix of another (e.g. ".../rigs/go" vs ".../rigs/gold").
+func environHasVar(environ []byte, needle string) bool {
+	for _, entry := range strings.Split(string(environ), "\x00") {
+		if entry == needle {
+			return true
+		}
+	}
+	return false
 }
