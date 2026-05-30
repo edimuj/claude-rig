@@ -151,9 +151,9 @@ func TestFormatTimeAgo(t *testing.T) {
 
 func TestSetDiff(t *testing.T) {
 	tests := []struct {
-		name           string
-		a, b           []string
-		wantA, wantB   []string
+		name         string
+		a, b         []string
+		wantA, wantB []string
 	}{
 		{"identical", []string{"a", "b"}, []string{"a", "b"}, nil, nil},
 		{"disjoint", []string{"a"}, []string{"b"}, []string{"a"}, []string{"b"}},
@@ -1626,12 +1626,12 @@ func TestCompareVersionsPreRelease(t *testing.T) {
 		a, b string
 		want int
 	}{
-		{"2.1.9", "2.1.85", -1},   // numeric, not lexicographic
+		{"2.1.9", "2.1.85", -1}, // numeric, not lexicographic
 		{"2.1.85", "2.1.9", 1},
 		{"2.1.9", "2.1.9", 0},
 		{"2.1.9-beta", "2.1.9", 0}, // suffix ignored on the segment
 		{"2.1.10-rc1", "2.1.9", 1},
-		{"2.1", "2.1.0", 0},        // short version padded with zero
+		{"2.1", "2.1.0", 0}, // short version padded with zero
 		{"3.0.0", "2.9.9", 1},
 	}
 	for _, tt := range tests {
