@@ -913,13 +913,19 @@ func cmdIsolate(args []string) error {
 		return err
 	}
 
-	cfg := loadRigConfig(dir)
 	items := args[1:]
 
+	// Validate everything up front so a bad item can't leave the rig half-isolated
+	// (local dirs created on disk but not recorded in rig.json).
 	for _, item := range items {
 		if !isIsolatable(item) {
 			return fmt.Errorf("%q is not isolatable. Valid items: %s", item, strings.Join(isolatableItems, ", "))
 		}
+	}
+
+	cfg := loadRigConfig(dir)
+
+	for _, item := range items {
 		if cfg.isIsolated(item) {
 			fmt.Printf("  %s — already isolated\n", item)
 			continue
@@ -2767,6 +2773,9 @@ func cmdList() error {
 		rigDirs[dir] = e.Name()
 	}
 
+	// Scan /proc once for all rigs instead of per-rig.
+	sessionsByDir := scanClaudeSessions()
+
 	found := false
 	for _, e := range entries {
 		if !e.IsDir() {
@@ -2776,9 +2785,8 @@ func cmdList() error {
 		name := e.Name()
 		dir, _ := rigDir(name)
 
-		sessions := rigRunningSessions(dir)
 		marker := "  "
-		if len(sessions) > 0 {
+		if len(sessionsByDir[dir]) > 0 {
 			marker = "* "
 		}
 
@@ -4686,6 +4694,9 @@ func cmdStatus(args []string) error {
 		return printStatusDetail(name, dir, rigDirs)
 	}
 
+	// Scan /proc once for all rigs instead of per-rig.
+	sessionsByDir := scanClaudeSessions()
+
 	// Overview table of all rigs
 	found := false
 	for _, e := range entries {
@@ -4696,7 +4707,7 @@ func cmdStatus(args []string) error {
 		name := e.Name()
 		dir, _ := rigDir(name)
 
-		sessions := rigRunningSessions(dir)
+		sessions := sessionsByDir[dir]
 		marker := "  "
 		if len(sessions) > 0 {
 			marker = "* "
@@ -4780,9 +4791,23 @@ func printStatusDetail(name, dir string, rigDirs map[string]string) error {
 }
 
 // rigDiskUsage returns the total size of real (non-symlinked) files in the rig directory.
+// Unlike rigDiskUsageDetailed it does not follow symlinks into shared trees, making it
+// cheap enough to call for every rig in the list/status overview.
 func rigDiskUsage(dir string) int64 {
-	size, _ := rigDiskUsageDetailed(dir)
-	return size
+	var realSize int64
+	filepath.Walk(dir, func(_ string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		// filepath.Walk lstats and does not descend into symlinked dirs, so just
+		// skip counting symlinks — no need to follow them or SkipDir.
+		if info.Mode()&os.ModeSymlink != 0 || info.IsDir() {
+			return nil
+		}
+		realSize += info.Size()
+		return nil
+	})
+	return realSize
 }
 
 // rigDiskUsageDetailed returns (real file size, symlink target size) for the rig directory.
@@ -4812,7 +4837,9 @@ func rigDiskUsageDetailed(dir string) (int64, int64) {
 					symlinkSize += tgt.Size()
 				}
 			}
-			return filepath.SkipDir
+			// Don't SkipDir here: for a file symlink that would skip the rest of
+			// the containing directory. filepath.Walk won't descend symlinks anyway.
+			return nil
 		}
 		if !info.IsDir() {
 			realSize += info.Size()

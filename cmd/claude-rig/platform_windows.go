@@ -209,3 +209,9 @@ func parseClaudeAlias(line string) string {
 func rigRunningSessions(dir string) []int {
 	return nil
 }
+
+// scanClaudeSessions returns an empty map on Windows (no /proc, and reading other
+// processes' environment requires non-stdlib APIs).
+func scanClaudeSessions() map[string][]int {
+	return map[string][]int{}
+}

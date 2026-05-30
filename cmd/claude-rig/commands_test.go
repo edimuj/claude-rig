@@ -1539,3 +1539,73 @@ func TestSyncPluginsDetectsVersionDrift(t *testing.T) {
 		t.Error("v1 symlink should have been removed after version update")
 	}
 }
+
+// B5: cmdIsolate must validate all items before mutating disk/config, so an
+// invalid item can't leave the rig half-isolated.
+func TestCmdIsolateValidatesBeforeMutating(t *testing.T) {
+	home := setupTestHome(t)
+	createRigDir(t, home, "testrig")
+
+	// "conversations" is valid, "bogus" is not — the bad item should abort the
+	// whole operation with nothing applied.
+	err := cmdIsolate([]string{"testrig", "conversations", "bogus"})
+	if err == nil {
+		t.Fatal("expected error for invalid item, got nil")
+	}
+
+	dir := filepath.Join(home, ".claude-rig", "rigs", "testrig")
+
+	// conversations must NOT have been created on disk...
+	if _, err := os.Lstat(filepath.Join(dir, "conversations")); err == nil {
+		t.Error("conversations dir was created despite validation failure")
+	}
+	// ...and must NOT be recorded in rig.json.
+	if loadRigConfig(dir).isIsolated("conversations") {
+		t.Error("conversations recorded as isolated despite validation failure")
+	}
+}
+
+func TestCmdIsolateAppliesValidItems(t *testing.T) {
+	home := setupTestHome(t)
+	createRigDir(t, home, "testrig")
+
+	if err := cmdIsolate([]string{"testrig", "conversations", "todos"}); err != nil {
+		t.Fatalf("cmdIsolate: %v", err)
+	}
+
+	dir := filepath.Join(home, ".claude-rig", "rigs", "testrig")
+	cfg := loadRigConfig(dir)
+	for _, item := range []string{"conversations", "todos"} {
+		if !cfg.isIsolated(item) {
+			t.Errorf("%s not recorded as isolated", item)
+		}
+		if _, err := os.Stat(filepath.Join(dir, item)); err != nil {
+			t.Errorf("%s dir not created: %v", item, err)
+		}
+	}
+}
+
+// P2: rigDiskUsage counts only real files and never follows symlinks into
+// shared trees.
+func TestRigDiskUsageSkipsSymlinks(t *testing.T) {
+	home := setupTestHome(t)
+	dir := createRigDir(t, home, "disktest")
+
+	// A real file of known size.
+	if err := os.WriteFile(filepath.Join(dir, "real.txt"), make([]byte, 100), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A symlink to a big external tree — must not be counted.
+	bigDir := filepath.Join(home, "big")
+	os.MkdirAll(bigDir, 0755)
+	os.WriteFile(filepath.Join(bigDir, "huge.bin"), make([]byte, 100000), 0644)
+	if err := os.Symlink(bigDir, filepath.Join(dir, "shared")); err != nil {
+		t.Fatal(err)
+	}
+
+	got := rigDiskUsage(dir)
+	if got < 100 || got > 1000 {
+		t.Errorf("rigDiskUsage = %d, want ~100 (real file only, symlink target excluded)", got)
+	}
+}

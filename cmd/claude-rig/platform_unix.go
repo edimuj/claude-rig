@@ -165,3 +165,43 @@ func environHasVar(environ []byte, needle string) bool {
 	}
 	return false
 }
+
+// scanClaudeSessions scans /proc once and returns a map of CLAUDE_CONFIG_DIR
+// value → running PIDs. Callers that need session counts for many rigs (list,
+// status) use this to avoid re-reading every process's environ per rig.
+// Returns an empty map on non-Linux.
+func scanClaudeSessions() map[string][]int {
+	sessions := make(map[string][]int)
+	procs, err := os.ReadDir("/proc")
+	if err != nil {
+		return sessions
+	}
+	const prefix = "CLAUDE_CONFIG_DIR="
+	for _, p := range procs {
+		if !p.IsDir() {
+			continue
+		}
+		pid := 0
+		for _, c := range p.Name() {
+			if c < '0' || c > '9' {
+				pid = -1
+				break
+			}
+			pid = pid*10 + int(c-'0')
+		}
+		if pid <= 0 {
+			continue
+		}
+		env, err := os.ReadFile(filepath.Join("/proc", p.Name(), "environ"))
+		if err != nil {
+			continue
+		}
+		for _, entry := range strings.Split(string(env), "\x00") {
+			if strings.HasPrefix(entry, prefix) {
+				sessions[entry[len(prefix):]] = append(sessions[entry[len(prefix):]], pid)
+				break
+			}
+		}
+	}
+	return sessions
+}
