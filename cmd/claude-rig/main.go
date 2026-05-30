@@ -52,7 +52,7 @@ func main() {
 	case "create":
 		err = cmdCreate(args)
 	case "list", "ls":
-		err = cmdList()
+		err = cmdList(args)
 	case "delete", "rm":
 		err = cmdDelete(args)
 	case "rename", "mv":
@@ -161,7 +161,7 @@ Commands:
   clone <src|default> <dest>  Clone a rig or ~/.claude/ config (--link-auth, --no-isolate-defaults)
   link-auth <name>        Link rig to shared auth (--from <rig> for cross-rig)
   unlink-auth <name>      Remove shared auth, rig will use its own
-  list                    List all rigs (* = running sessions)
+  list                    List all rigs (* = running sessions); --json for machine output
   delete <name>           Delete a rig
   rename <old> <new>      Rename a rig
   sync [rig]              Sync auth, symlinks, inherited items, plugins, MCP, settings (all rigs if none given)
@@ -184,12 +184,13 @@ Commands:
   isolation [rig]         Show isolation status for one or all rigs
     --details              Show individual entries with source info
     --skills|--plugins|... Filter to specific categories
+    --json                 Machine-readable output
   inherit <items> [rig]   Inherit global skills/agents/hooks/commands from ~/.claude/
   uninherit <items> [rig] Stop inheriting (remove global symlinks)
   diff <rig1> <rig2>      Compare two rigs (auth, settings, plugins, MCP, etc.)
   export <rig> [file]     Export rig to .tar.gz (--include-auth, --include-data)
   import <file> <name>    Import rig from archive (--link-auth)
-  status [rig]            Show rig status (disk, sessions, last used)
+  status [rig]            Show rig status (disk, sessions, last used); --json for machine output
   plugin <subcommand>     Run claude plugin commands on active rig (--rig <name>)
   update-plugins [rigs]   Update marketplace plugins (all rigs if none given)
                           -j N  concurrent rigs (default 2)

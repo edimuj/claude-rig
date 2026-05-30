@@ -288,10 +288,10 @@ func compareVersions(a, b string) int {
 	for i := 0; i < maxLen; i++ {
 		var na, nb int
 		if i < len(partsA) {
-			na, _ = strconv.Atoi(partsA[i])
+			na = leadingInt(partsA[i])
 		}
 		if i < len(partsB) {
-			nb, _ = strconv.Atoi(partsB[i])
+			nb = leadingInt(partsB[i])
 		}
 		if na < nb {
 			return -1
@@ -301,6 +301,20 @@ func compareVersions(a, b string) int {
 		}
 	}
 	return 0
+}
+
+// leadingInt parses the leading run of digits in s (e.g. "92-beta" → 92, "" → 0).
+// Lets compareVersions handle pre-release suffixes without choking on Atoi errors.
+func leadingInt(s string) int {
+	end := 0
+	for end < len(s) && s[end] >= '0' && s[end] <= '9' {
+		end++
+	}
+	if end == 0 {
+		return 0
+	}
+	n, _ := strconv.Atoi(s[:end])
+	return n
 }
 
 // updateLatestLink ensures ~/.claude-rig/claude-latest points to the highest

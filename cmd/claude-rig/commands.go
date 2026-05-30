@@ -80,7 +80,7 @@ func saveRigConfig(rigDir string, cfg rigConfig) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(rigConfigPath(rigDir), append(data, '\n'), 0644)
+	return writeFileAtomic(rigConfigPath(rigDir), append(data, '\n'), 0644)
 }
 
 func (c rigConfig) isIsolated(name string) bool {
@@ -235,7 +235,7 @@ func saveDefaultSettings(m map[string]any) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(data, '\n'), 0644)
+	return writeFileAtomic(path, append(data, '\n'), 0644)
 }
 
 // syncDefaultSettings applies default settings to a single rig's settings.json.
@@ -335,7 +335,7 @@ func saveGlobalConfig(m map[string]any) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(data, '\n'), 0644)
+	return writeFileAtomic(path, append(data, '\n'), 0644)
 }
 
 func getGlobalConfigInt(key string, fallback int) int {
@@ -674,7 +674,7 @@ func saveBlueprint(dir string, bp blueprint) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, "blueprint.json"), append(data, '\n'), 0644)
+	return writeFileAtomic(filepath.Join(dir, "blueprint.json"), append(data, '\n'), 0644)
 }
 
 // copyRealFiles copies regular files from srcDir to dstDir, skipping symlinks.
@@ -1118,12 +1118,15 @@ func cmdIsolation(args []string) error {
 
 	var name string
 	var details bool
+	var jsonOut bool
 	var filters []string
 	validFilters := map[string]bool{"skills": true, "agents": true, "commands": true, "plugins": true, "mcp": true}
 	for _, a := range args {
 		switch {
 		case a == "--details":
 			details = true
+		case a == "--json":
+			jsonOut = true
 		case strings.HasPrefix(a, "--") && validFilters[strings.TrimPrefix(a, "--")]:
 			filters = append(filters, strings.TrimPrefix(a, "--"))
 		case !strings.HasPrefix(a, "-") && name == "":
@@ -1144,6 +1147,14 @@ func cmdIsolation(args []string) error {
 		}
 
 		cfg := loadRigConfig(dir)
+		if jsonOut {
+			data, err := json.MarshalIndent(collectIsolationStatus(name, cfg), "", "  ")
+			if err != nil {
+				return err
+			}
+			fmt.Println(string(data))
+			return nil
+		}
 		printIsolationStatus(name, cfg, isoOpts)
 		return nil
 	}
@@ -1152,10 +1163,31 @@ func cmdIsolation(args []string) error {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if os.IsNotExist(err) {
+			if jsonOut {
+				fmt.Println("[]")
+				return nil
+			}
 			fmt.Println("No rigs found.")
 			return nil
 		}
 		return err
+	}
+
+	if jsonOut {
+		out := []isolationStatus{}
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			dir, _ := rigDir(e.Name())
+			out = append(out, collectIsolationStatus(e.Name(), loadRigConfig(dir)))
+		}
+		data, err := json.MarshalIndent(out, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(data))
+		return nil
 	}
 
 	for _, e := range entries {
@@ -1167,6 +1199,121 @@ func cmdIsolation(args []string) error {
 		printIsolationStatus(e.Name(), cfg, isoOpts)
 	}
 	return nil
+}
+
+// isolationStatus is the machine-readable form of a rig's isolation state.
+type isolationStatus struct {
+	Name       string                  `json:"name"`
+	Isolatable map[string]string       `json:"isolatable"` // item → isolated|shared|absent
+	Inheriting []string                `json:"inheriting,omitempty"`
+	Content    map[string]contentCount `json:"content"` // skills/agents/commands/plugins/mcp → counts
+}
+
+type contentCount struct {
+	Total     int `json:"total"`
+	Local     int `json:"local"`
+	Inherited int `json:"inherited,omitempty"`
+	Synced    int `json:"synced,omitempty"`
+}
+
+// collectIsolationStatus computes the structured isolation state for one rig,
+// mirroring what printIsolationStatus renders as text.
+func collectIsolationStatus(name string, cfg rigConfig) isolationStatus {
+	dir, _ := rigDir(name)
+	home, _ := globalClaudeHome()
+
+	st := isolationStatus{
+		Name:       name,
+		Isolatable: map[string]string{},
+		Content:    map[string]contentCount{},
+	}
+	if len(cfg.Inherit) > 0 {
+		st.Inheriting = cfg.Inherit
+	}
+
+	for _, item := range isolatableItems {
+		switch item {
+		case "plugins", "mcp":
+			if cfg.isIsolated(item) {
+				st.Isolatable[item] = "isolated"
+			} else {
+				st.Isolatable[item] = "shared"
+			}
+		default:
+			status := "shared"
+			if info, err := os.Lstat(filepath.Join(dir, item)); err == nil {
+				if info.Mode()&os.ModeSymlink == 0 {
+					status = "isolated"
+				}
+			} else {
+				status = "absent"
+			}
+			st.Isolatable[item] = status
+		}
+	}
+
+	// Dir-based content categories
+	for _, cat := range []string{"skills", "agents", "commands"} {
+		catDir := filepath.Join(dir, cat)
+		globalDir := filepath.Join(home, cat)
+		inherited := cfg.isInherited(cat)
+		var local, inh int
+		entries, _ := os.ReadDir(catDir)
+		for _, e := range entries {
+			p := filepath.Join(catDir, e.Name())
+			info, err := os.Lstat(p)
+			if err != nil {
+				continue
+			}
+			if info.Mode()&os.ModeSymlink != 0 && inherited {
+				target, _ := os.Readlink(p)
+				if strings.HasPrefix(target, globalDir+string(filepath.Separator)) || filepath.Dir(target) == globalDir {
+					inh++
+					continue
+				}
+			}
+			local++
+		}
+		st.Content[cat] = contentCount{Total: local + inh, Local: local, Inherited: inh}
+	}
+
+	// Plugins (local vs synced)
+	synced := map[string]bool{}
+	for _, s := range cfg.SyncedPlugins {
+		synced[s] = true
+	}
+	var pLocal, pSynced int
+	if manifest, err := readPluginManifest(filepath.Join(dir, "plugins", "installed_plugins.json")); err == nil {
+		for k := range manifest.Plugins {
+			if synced[k] {
+				pSynced++
+			} else {
+				pLocal++
+			}
+		}
+	}
+	st.Content["plugins"] = contentCount{Total: pLocal + pSynced, Local: pLocal, Synced: pSynced}
+
+	// MCP (local vs synced)
+	syncedMCP := map[string]bool{}
+	for _, s := range cfg.SyncedMCP {
+		syncedMCP[s] = true
+	}
+	var mLocal, mSynced int
+	if claudeJSON, err := readJSONFile(filepath.Join(dir, ".claude.json")); err == nil {
+		if servers, ok := claudeJSON["mcpServers"].(map[string]any); ok {
+			for n := range servers {
+				if syncedMCP[n] {
+					mSynced++
+				} else {
+					mLocal++
+				}
+			}
+		}
+	}
+	st.Content["mcp"] = contentCount{Total: mLocal + mSynced, Local: mLocal, Synced: mSynced}
+
+	return st
 }
 
 type isolationOpts struct {
@@ -2140,6 +2287,16 @@ func cmdDoctor(args []string) error {
 	return nil
 }
 
+// stdinIsTerminal reports whether stdin is an interactive terminal rather than a
+// pipe or file, so prompts can be skipped safely in non-interactive contexts.
+func stdinIsTerminal() bool {
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
+}
+
 // removeFromSlice returns a new slice with all occurrences of val removed.
 func removeFromSlice(s []string, val string) []string {
 	var result []string
@@ -2176,6 +2333,10 @@ func cmdInit() error {
 		fmt.Println("See: claude-rig help")
 	} else if hasShellIntegration(rcFile) {
 		fmt.Printf("Shell integration already present in %s\n", rcFile)
+	} else if !stdinIsTerminal() {
+		// Don't silently edit the user's shell rc in a non-interactive context.
+		fmt.Printf("Non-interactive shell — skipping shell integration.\n")
+		fmt.Printf("Run 'claude-rig init' from a terminal to add the claude --rig wrapper to %s\n", rcFile)
 	} else {
 		fmt.Printf("Add claude --rig wrapper to %s? [Y/n] ", rcFile)
 		var confirm string
@@ -2240,7 +2401,7 @@ func cmdCreate(args []string) error {
 		inheritItems = inheritableItems
 	}
 	if name == "" {
-		return fmt.Errorf("usage: claude-rig create <name> [--link-auth] [--isolate <items,...>] [--no-isolate-defaults] [--isolate-all] [--inherit-all]")
+		return fmt.Errorf("usage: claude-rig create <name> [--link-auth] [--isolate <items,...>] [--no-isolate-defaults] [--isolate-all] [--inherit-skills|--inherit-agents|--inherit-hooks|--inherit-commands|--inherit-all]")
 	}
 
 	// Build final isolate list
@@ -2748,7 +2909,14 @@ func cmdUnlinkAuth(args []string) error {
 }
 
 // cmdList shows all rigs with auth status and item counts.
-func cmdList() error {
+func cmdList(args []string) error {
+	jsonOut := false
+	for _, a := range args {
+		if a == "--json" {
+			jsonOut = true
+		}
+	}
+
 	root, err := rigsRoot()
 	if err != nil {
 		return err
@@ -2757,6 +2925,10 @@ func cmdList() error {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if os.IsNotExist(err) {
+			if jsonOut {
+				fmt.Println("[]")
+				return nil
+			}
 			fmt.Println("No rigs found. Run: claude-rig init")
 			return nil
 		}
@@ -2775,6 +2947,44 @@ func cmdList() error {
 
 	// Scan /proc once for all rigs instead of per-rig.
 	sessionsByDir := scanClaudeSessions()
+
+	if jsonOut {
+		type rigListEntry struct {
+			Name     string `json:"name"`
+			Running  int    `json:"running"`
+			Auth     string `json:"auth"`
+			Skills   int    `json:"skills"`
+			Plugins  int    `json:"plugins"`
+			MCP      int    `json:"mcp"`
+			Isolated int    `json:"isolated"`
+			Pinned   string `json:"pinned_version,omitempty"`
+		}
+		out := []rigListEntry{}
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			name := e.Name()
+			dir, _ := rigDir(name)
+			cfg := loadRigConfig(dir)
+			out = append(out, rigListEntry{
+				Name:     name,
+				Running:  len(sessionsByDir[dir]),
+				Auth:     rigAuthStatus(dir, rigDirs),
+				Skills:   countDirEntries(filepath.Join(dir, "skills")),
+				Plugins:  countDirEntries(filepath.Join(dir, "plugins")),
+				MCP:      countMCPServers(filepath.Join(dir, ".claude.json")),
+				Isolated: len(cfg.Isolate),
+				Pinned:   cfg.ClaudeVersion,
+			})
+		}
+		data, err := json.MarshalIndent(out, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(data))
+		return nil
+	}
 
 	found := false
 	for _, e := range entries {
@@ -4036,7 +4246,7 @@ func seedClaudeJSON(rigDir string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(rigDir, ".claude.json"), append(data, '\n'), 0644)
+	return writeFileAtomic(filepath.Join(rigDir, ".claude.json"), append(data, '\n'), 0644)
 }
 
 // loadLaunchArgs reads default launch arguments from a directory's .launch-args file.
@@ -4128,7 +4338,7 @@ func writePluginManifest(path string, m pluginManifest) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(data, '\n'), 0644)
+	return writeFileAtomic(path, append(data, '\n'), 0644)
 }
 
 // readJSONFile reads and parses a JSON file into a map.
@@ -4148,7 +4358,33 @@ func writeJSONFile(path string, m map[string]any) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(data, '\n'), 0644)
+	return writeFileAtomic(path, append(data, '\n'), 0644)
+}
+
+// writeFileAtomic writes data to path via a temp file + rename, so a crash or
+// SIGKILL mid-write can't leave a truncated/corrupt file. Critical for the JSON
+// state files (.claude.json, settings.json, rig.json, manifests) that a rig
+// needs to launch. The temp file is created in the same directory so the rename
+// stays on one filesystem and is atomic.
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op once the rename succeeds
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpName, perm); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 // syncPlugins copies missing plugins from source plugins dir into the rig.
@@ -4626,6 +4862,9 @@ func validateRigName(name string) error {
 	if name == "" {
 		return fmt.Errorf("rig name cannot be empty")
 	}
+	if name == "default" {
+		return fmt.Errorf("%q is reserved (it means ~/.claude/ as a clone source)", name)
+	}
 	if strings.ContainsAny(name, "/\\. ") {
 		return fmt.Errorf("rig name cannot contain slashes, dots, or spaces")
 	}
@@ -4657,6 +4896,16 @@ func removeEnv(env []string, key string) []string {
 }
 
 func cmdStatus(args []string) error {
+	jsonOut := false
+	var name string
+	for _, a := range args {
+		if a == "--json" {
+			jsonOut = true
+		} else if !strings.HasPrefix(a, "-") && name == "" {
+			name = a
+		}
+	}
+
 	root, err := rigsRoot()
 	if err != nil {
 		return err
@@ -4665,6 +4914,10 @@ func cmdStatus(args []string) error {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if os.IsNotExist(err) {
+			if jsonOut {
+				fmt.Println("[]")
+				return nil
+			}
 			fmt.Println("No rigs found. Run: claude-rig init")
 			return nil
 		}
@@ -4682,8 +4935,7 @@ func cmdStatus(args []string) error {
 	}
 
 	// Single rig mode
-	if len(args) > 0 {
-		name := args[0]
+	if name != "" {
 		dir, err := rigDir(name)
 		if err != nil {
 			return err
@@ -4691,11 +4943,36 @@ func cmdStatus(args []string) error {
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
 			return fmt.Errorf("rig %q does not exist", name)
 		}
+		if jsonOut {
+			data, err := json.MarshalIndent(rigStatusJSON(name, dir, rigDirs), "", "  ")
+			if err != nil {
+				return err
+			}
+			fmt.Println(string(data))
+			return nil
+		}
 		return printStatusDetail(name, dir, rigDirs)
 	}
 
 	// Scan /proc once for all rigs instead of per-rig.
 	sessionsByDir := scanClaudeSessions()
+
+	if jsonOut {
+		out := []rigStatus{}
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			dir, _ := rigDir(e.Name())
+			out = append(out, rigStatusJSON(e.Name(), dir, rigDirs))
+		}
+		data, err := json.MarshalIndent(out, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(data))
+		return nil
+	}
 
 	// Overview table of all rigs
 	found := false
@@ -4738,6 +5015,54 @@ func cmdStatus(args []string) error {
 		fmt.Println("No rigs found. Run: claude-rig create <name>")
 	}
 	return nil
+}
+
+// rigStatus is the machine-readable form of a rig's status (status --json).
+type rigStatus struct {
+	Name             string   `json:"name"`
+	Auth             string   `json:"auth"`
+	Skills           int      `json:"skills"`
+	Plugins          int      `json:"plugins"`
+	MCP              int      `json:"mcp"`
+	Isolated         []string `json:"isolated"`
+	DiskRealBytes    int64    `json:"disk_real_bytes"`
+	DiskSymlinkBytes int64    `json:"disk_symlink_bytes"`
+	Sessions         []int    `json:"sessions"`
+	PinnedVersion    string   `json:"pinned_version,omitempty"`
+	LastUsed         string   `json:"last_used,omitempty"`
+	Path             string   `json:"path"`
+}
+
+func rigStatusJSON(name, dir string, rigDirs map[string]string) rigStatus {
+	cfg := loadRigConfig(dir)
+	realSize, symlinkSize := rigDiskUsageDetailed(dir)
+	lastUsed := rigLastUsed(dir)
+	last := ""
+	if !lastUsed.IsZero() {
+		last = lastUsed.UTC().Format(time.RFC3339)
+	}
+	iso := cfg.Isolate
+	if iso == nil {
+		iso = []string{}
+	}
+	sessions := rigRunningSessions(dir)
+	if sessions == nil {
+		sessions = []int{}
+	}
+	return rigStatus{
+		Name:             name,
+		Auth:             rigAuthStatus(dir, rigDirs),
+		Skills:           countDirEntries(filepath.Join(dir, "skills")),
+		Plugins:          countDirEntries(filepath.Join(dir, "plugins")),
+		MCP:              countMCPServers(filepath.Join(dir, ".claude.json")),
+		Isolated:         iso,
+		DiskRealBytes:    realSize,
+		DiskSymlinkBytes: symlinkSize,
+		Sessions:         sessions,
+		PinnedVersion:    cfg.ClaudeVersion,
+		LastUsed:         last,
+		Path:             dir,
+	}
 }
 
 func printStatusDetail(name, dir string, rigDirs map[string]string) error {
@@ -6584,5 +6909,5 @@ func setClaudeJSONFields(dir string, fields map[string]any) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(out, '\n'), 0600)
+	return writeFileAtomic(path, append(out, '\n'), 0600)
 }

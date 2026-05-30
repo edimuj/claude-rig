@@ -1609,3 +1609,108 @@ func TestRigDiskUsageSkipsSymlinks(t *testing.T) {
 		t.Errorf("rigDiskUsage = %d, want ~100 (real file only, symlink target excluded)", got)
 	}
 }
+
+// M3: "default" is reserved as the clone-source sentinel.
+func TestValidateRigNameReserved(t *testing.T) {
+	if err := validateRigName("default"); err == nil {
+		t.Error("expected 'default' to be rejected as a reserved name")
+	}
+	if err := validateRigName("myrig"); err != nil {
+		t.Errorf("valid name rejected: %v", err)
+	}
+}
+
+// M4: compareVersions tolerates pre-release suffixes and pads short versions.
+func TestCompareVersionsPreRelease(t *testing.T) {
+	tests := []struct {
+		a, b string
+		want int
+	}{
+		{"2.1.9", "2.1.85", -1},   // numeric, not lexicographic
+		{"2.1.85", "2.1.9", 1},
+		{"2.1.9", "2.1.9", 0},
+		{"2.1.9-beta", "2.1.9", 0}, // suffix ignored on the segment
+		{"2.1.10-rc1", "2.1.9", 1},
+		{"2.1", "2.1.0", 0},        // short version padded with zero
+		{"3.0.0", "2.9.9", 1},
+	}
+	for _, tt := range tests {
+		if got := compareVersions(tt.a, tt.b); got != tt.want {
+			t.Errorf("compareVersions(%q, %q) = %d, want %d", tt.a, tt.b, got, tt.want)
+		}
+	}
+}
+
+// M1: writeFileAtomic writes content with the requested perm and overwrites cleanly.
+func TestWriteFileAtomic(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+
+	if err := writeFileAtomic(path, []byte(`{"a":1}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != `{"a":1}` {
+		t.Fatalf("content = %q err = %v", data, err)
+	}
+	info, _ := os.Stat(path)
+	if info.Mode().Perm() != 0600 {
+		t.Errorf("perm = %o, want 0600", info.Mode().Perm())
+	}
+
+	// Overwrite, and ensure no leftover temp files in the dir.
+	if err := writeFileAtomic(path, []byte("new"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 {
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("expected only the target file, got %v", names)
+	}
+}
+
+// M2: rigStatusJSON emits non-nil slices so JSON renders [] not null.
+func TestRigStatusJSON(t *testing.T) {
+	home := setupTestHome(t)
+	dir := createRigDir(t, home, "jsontest")
+	rigDirs := map[string]string{dir: "jsontest"}
+
+	st := rigStatusJSON("jsontest", dir, rigDirs)
+	if st.Name != "jsontest" {
+		t.Errorf("name = %q", st.Name)
+	}
+	if st.Isolated == nil {
+		t.Error("Isolated should be [] not nil for clean JSON")
+	}
+	if st.Sessions == nil {
+		t.Error("Sessions should be [] not nil for clean JSON")
+	}
+	if st.Path != dir {
+		t.Errorf("path = %q, want %q", st.Path, dir)
+	}
+}
+
+// M2: collectIsolationStatus reports item statuses and content counts.
+func TestCollectIsolationStatus(t *testing.T) {
+	home := setupTestHome(t)
+	createRigDir(t, home, "isotest")
+	if err := cmdIsolate([]string{"isotest", "conversations"}); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := filepath.Join(home, ".claude-rig", "rigs", "isotest")
+	st := collectIsolationStatus("isotest", loadRigConfig(dir))
+
+	if st.Isolatable["conversations"] != "isolated" {
+		t.Errorf("conversations = %q, want isolated", st.Isolatable["conversations"])
+	}
+	if _, ok := st.Content["skills"]; !ok {
+		t.Error("missing skills content count")
+	}
+	if _, ok := st.Content["mcp"]; !ok {
+		t.Error("missing mcp content count")
+	}
+}

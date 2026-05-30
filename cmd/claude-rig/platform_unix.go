@@ -36,6 +36,23 @@ claude() {
 }
 `
 
+// fishWrapperTemplate is the equivalent for fish shells (different function syntax).
+const fishWrapperTemplate = `
+# claude-rig: --rig flag support
+functions -e claude
+function claude
+  for arg in $argv
+    if string match -q -- '--rig=*' $arg
+      set rig (string replace -- '--rig=' '' $arg)
+      set rest (string match -v -- $arg $argv)
+      claude-rig launch $rig $rest
+      return
+    end
+  end
+  command claude%s $argv
+end
+`
+
 func detectShellRC() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -46,6 +63,8 @@ func detectShellRC() string {
 	switch {
 	case strings.HasSuffix(shell, "/zsh"):
 		return filepath.Join(home, ".zshrc")
+	case strings.HasSuffix(shell, "/fish"):
+		return filepath.Join(home, ".config", "fish", "config.fish")
 	case strings.HasSuffix(shell, "/bash"):
 		// Prefer .bashrc, fall back to .bash_profile on macOS
 		bashrc := filepath.Join(home, ".bashrc")
@@ -76,7 +95,18 @@ func installShellIntegration(rcFile string) error {
 		return err
 	}
 
-	// Detect existing claude alias and extract its flags
+	// Ensure parent dir exists (e.g. ~/.config/fish/ may be missing).
+	if err := os.MkdirAll(filepath.Dir(rcFile), 0755); err != nil {
+		return err
+	}
+
+	// fish has its own function syntax; bash/zsh share one template.
+	tmpl := shellWrapperTemplate
+	if filepath.Base(rcFile) == "config.fish" {
+		tmpl = fishWrapperTemplate
+	}
+
+	// Detect existing claude alias and extract its flags (bash/zsh syntax only).
 	extraFlags := ""
 	lines := strings.Split(string(data), "\n")
 	var newLines []string
@@ -93,7 +123,7 @@ func installShellIntegration(rcFile string) error {
 		}
 	}
 
-	wrapper := fmt.Sprintf(shellWrapperTemplate, extraFlags)
+	wrapper := fmt.Sprintf(tmpl, extraFlags)
 	output := strings.Join(newLines, "\n") + wrapper
 
 	return os.WriteFile(rcFile, []byte(output), 0644)
