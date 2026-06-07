@@ -188,7 +188,7 @@ func rigRunningSessions(dir string) []int {
 // an entry exactly equal to needle. Exact-entry matching avoids false positives
 // where one rig dir is a prefix of another (e.g. ".../rigs/go" vs ".../rigs/gold").
 func environHasVar(environ []byte, needle string) bool {
-	for _, entry := range strings.Split(string(environ), "\x00") {
+	for entry := range strings.SplitSeq(string(environ), "\x00") {
 		if entry == needle {
 			return true
 		}
@@ -226,7 +226,7 @@ func scanClaudeSessions() map[string][]int {
 		if err != nil {
 			continue
 		}
-		for _, entry := range strings.Split(string(env), "\x00") {
+		for entry := range strings.SplitSeq(string(env), "\x00") {
 			if strings.HasPrefix(entry, prefix) {
 				sessions[entry[len(prefix):]] = append(sessions[entry[len(prefix):]], pid)
 				break

@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -154,30 +155,15 @@ var inheritableItems = []string{
 }
 
 func isRigSpecific(name string) bool {
-	for _, item := range rigSpecificItems {
-		if name == item {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(rigSpecificItems, name)
 }
 
 func isInheritable(name string) bool {
-	for _, item := range inheritableItems {
-		if name == item {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(inheritableItems, name)
 }
 
 func isIsolatable(name string) bool {
-	for _, item := range isolatableItems {
-		if name == item {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(isolatableItems, name)
 }
 
 func defaultSettingsPath() string {
