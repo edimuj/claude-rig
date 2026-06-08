@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -1056,12 +1057,12 @@ func cmdShare(args []string) error {
 			}
 			userHome, _ := os.UserHomeDir()
 			sourceClaudeJSON := filepath.Join(userHome, ".claude.json")
-			synced, err := syncMCP(dir, sourceClaudeJSON)
+			res, err := syncMCP(dir, sourceClaudeJSON, cfg.SyncedMCP, false)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "  mcp — sync error: %v\n", err)
-			} else if len(synced) > 0 {
-				cfg.SyncedMCP = append(cfg.SyncedMCP, synced...)
-				fmt.Printf("  mcp — synced %d server(s) from global\n", len(synced))
+			} else if res.changed {
+				cfg.SyncedMCP = res.synced
+				fmt.Printf("  mcp — %s\n", formatMCPReconcile(res))
 			} else {
 				fmt.Printf("  mcp — shared (no new servers to sync)\n")
 			}
@@ -3148,11 +3149,13 @@ func cmdSync(args []string) error {
 	}
 
 	var names []string
-	var noPlugins, noMCP, noInherit, noSettings, noAuth bool
+	var noPlugins, noMCP, noInherit, noSettings, noAuth, dryRun bool
 	var fromRig string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
+		case a == "--dry-run":
+			dryRun = true
 		case a == "--no-plugins":
 			noPlugins = true
 		case a == "--no-mcp":
@@ -3228,9 +3231,42 @@ func cmdSync(args []string) error {
 		authSourceDir = fromDir
 	}
 
+	if dryRun {
+		fmt.Println("Dry run — previewing MCP reconciliation (no changes written):")
+	}
+
 	for _, name := range names {
 		dir, _ := rigDir(name)
 		cfg := loadRigConfig(dir)
+
+		// Dry run only previews the MCP reconcile — the step that mutates
+		// existing config — and skips every write.
+		if dryRun {
+			if noMCP || cfg.isIsolated("mcp") {
+				fmt.Printf("  %s — MCP sync skipped\n", name)
+				continue
+			}
+			res, err := syncMCP(dir, sourceClaudeJSON, cfg.SyncedMCP, true)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "  %s: MCP sync error: %v\n", name, err)
+				continue
+			}
+			if !res.changed {
+				fmt.Printf("  %s — MCP up to date\n", name)
+				continue
+			}
+			fmt.Printf("  %s — MCP would: %s\n", name, formatMCPReconcile(res))
+			for _, n := range res.added {
+				fmt.Printf("      + %s\n", n)
+			}
+			for _, n := range res.updated {
+				fmt.Printf("      ~ %s\n", n)
+			}
+			for _, n := range res.removed {
+				fmt.Printf("      - %s\n", n)
+			}
+			continue
+		}
 
 		// 0. Auth files — re-link if already symlinked or convert copies
 		if !noAuth {
@@ -3289,13 +3325,13 @@ func cmdSync(args []string) error {
 
 		// 4. MCP servers
 		if !noMCP && !cfg.isIsolated("mcp") {
-			synced, err := syncMCP(dir, sourceClaudeJSON)
+			res, err := syncMCP(dir, sourceClaudeJSON, cfg.SyncedMCP, false)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "  %s: MCP sync error: %v\n", name, err)
-			} else if len(synced) > 0 {
-				cfg.SyncedMCP = appendUnique(cfg.SyncedMCP, synced...)
+			} else if res.changed {
+				cfg.SyncedMCP = res.synced
 				saveRigConfig(dir, cfg)
-				fmt.Printf("  %s — synced %d MCP server(s)\n", name, len(synced))
+				fmt.Printf("  %s — MCP %s\n", name, formatMCPReconcile(res))
 			}
 		}
 
@@ -4791,17 +4827,28 @@ func cleanupSyncedPlugins(rigDir string, pluginNames []string) {
 	}
 }
 
-// syncMCP merges missing MCP servers from source .claude.json into target rig.
-// Returns newly synced server names.
-func syncMCP(rigDir, sourceClaudeJSON string) ([]string, error) {
+// mcpSyncResult describes a reconciliation of a rig's MCP servers against a source.
+type mcpSyncResult struct {
+	added   []string // servers newly copied from source
+	updated []string // owned servers overwritten because source config changed
+	removed []string // owned servers dropped because source no longer defines them
+	synced  []string // authoritative SyncedMCP set after reconciliation
+	changed bool      // whether anything needs persisting (.claude.json and/or rig.json)
+}
+
+// syncMCP reconciles MCP servers in the target rig's .claude.json against the
+// source. syncedMCP is the set of servers claude-rig owns (previously synced):
+// owned entries are added/updated/removed to match the source, while entries the
+// user added locally are left untouched (local precedence). With dryRun, nothing
+// is written — the returned result still describes what would change.
+func syncMCP(rigDir, sourceClaudeJSON string, syncedMCP []string, dryRun bool) (mcpSyncResult, error) {
+	res := mcpSyncResult{synced: syncedMCP}
+
 	srcData, err := readJSONFile(sourceClaudeJSON)
 	if err != nil {
-		return nil, nil // no source
+		return res, nil // no source — nothing to reconcile
 	}
-	srcServers, ok := srcData["mcpServers"].(map[string]any)
-	if !ok || len(srcServers) == 0 {
-		return nil, nil
-	}
+	srcServers, _ := srcData["mcpServers"].(map[string]any)
 
 	tgtClaudeJSON := filepath.Join(rigDir, ".claude.json")
 	tgtData, _ := readJSONFile(tgtClaudeJSON)
@@ -4813,25 +4860,87 @@ func syncMCP(rigDir, sourceClaudeJSON string) ([]string, error) {
 		tgtServers = make(map[string]any)
 	}
 
-	var synced []string
+	owned := make(map[string]bool, len(syncedMCP))
+	for _, n := range syncedMCP {
+		owned[n] = true
+	}
+
+	newOwned := make(map[string]bool)
+
+	// Add new servers and update owned ones whose source config changed.
 	for name, config := range srcServers {
-		if _, exists := tgtServers[name]; exists {
-			continue // local takes precedence
+		existing, exists := tgtServers[name]
+		switch {
+		case !exists:
+			tgtServers[name] = config
+			res.added = append(res.added, name)
+			newOwned[name] = true
+			res.changed = true
+		case owned[name]:
+			newOwned[name] = true
+			if !reflect.DeepEqual(existing, config) {
+				tgtServers[name] = config
+				res.updated = append(res.updated, name)
+				res.changed = true
+			}
+			// else: owned and identical — leave as is.
 		}
-		tgtServers[name] = config
-		synced = append(synced, name)
+		// else: user-local entry not owned by sync — local precedence, untouched.
 	}
 
-	if len(synced) == 0 {
-		return nil, nil
+	// Remove owned servers the source no longer defines.
+	for _, name := range syncedMCP {
+		if _, inSrc := srcServers[name]; inSrc {
+			continue
+		}
+		if _, inTgt := tgtServers[name]; inTgt {
+			delete(tgtServers, name)
+		}
+		res.removed = append(res.removed, name)
+		res.changed = true // ownership shrank — rig.json needs updating
 	}
 
-	tgtData["mcpServers"] = tgtServers
+	res.synced = make([]string, 0, len(newOwned))
+	for name := range newOwned {
+		res.synced = append(res.synced, name)
+	}
+	sort.Strings(res.synced)
+	sort.Strings(res.added)
+	sort.Strings(res.updated)
+	sort.Strings(res.removed)
+
+	if dryRun || !res.changed {
+		return res, nil
+	}
+
+	if len(tgtServers) == 0 {
+		delete(tgtData, "mcpServers")
+	} else {
+		tgtData["mcpServers"] = tgtServers
+	}
 	if err := writeJSONFile(tgtClaudeJSON, tgtData); err != nil {
-		return synced, fmt.Errorf("writing .claude.json: %w", err)
+		return res, fmt.Errorf("writing .claude.json: %w", err)
 	}
 
-	return synced, nil
+	return res, nil
+}
+
+// formatMCPReconcile summarizes a reconcile result as "+N added, ~N updated, -N removed".
+func formatMCPReconcile(res mcpSyncResult) string {
+	var parts []string
+	if len(res.added) > 0 {
+		parts = append(parts, fmt.Sprintf("+%d added", len(res.added)))
+	}
+	if len(res.updated) > 0 {
+		parts = append(parts, fmt.Sprintf("~%d updated", len(res.updated)))
+	}
+	if len(res.removed) > 0 {
+		parts = append(parts, fmt.Sprintf("-%d removed", len(res.removed)))
+	}
+	if len(parts) == 0 {
+		return "up to date"
+	}
+	return strings.Join(parts, ", ")
 }
 
 // cleanupSyncedMCP removes MCP servers that were synced from global.

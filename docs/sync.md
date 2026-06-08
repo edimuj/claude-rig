@@ -64,9 +64,21 @@ claude-rig plugin list --rig minimal
 
 ## MCP Server Sync
 
-MCP servers are merged from the global `~/.claude.json` into the rig's `.claude.json`. Local entries take precedence — if a rig defines its own version of an MCP server, the global one is skipped.
+MCP servers are reconciled from the global `~/.claude.json` into the rig's `.claude.json`. Servers claude-rig owns — those it synced earlier, tracked in `rig.json` (`synced_mcp`) — are kept in lockstep with the source:
 
-Synced servers are tracked in `rig.json` (`synced_mcp`).
+- **Added** — a source server missing from the rig is copied in and marked owned.
+- **Updated** — an owned server whose source definition changed is overwritten (so edits to a global server propagate to every rig).
+- **Removed** — an owned server the source no longer defines is deleted from the rig.
+
+Entries a rig defines itself (not in `synced_mcp`) always take precedence and are never touched, even if the source later defines a server of the same name.
+
+Preview the reconcile without writing:
+
+```bash
+# Show which MCP servers sync would add/update/remove
+claude-rig sync --dry-run
+claude-rig sync myrig --dry-run
+```
 
 ```bash
 # Isolate MCP — removes synced servers from the rig

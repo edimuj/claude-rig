@@ -170,6 +170,7 @@ Commands:
     --no-mcp               Skip MCP server sync
     --no-inherit           Skip inherited items sync
     --no-settings          Skip default settings sync
+    --dry-run              Preview MCP reconciliation (add/update/remove) without writing
     --from <rig>           Use another rig as source instead of global
   update                  Update Claude Code (forwards to claude update)
   versions                List available Claude Code versions on disk

@@ -1714,3 +1714,167 @@ func TestCollectIsolationStatus(t *testing.T) {
 		t.Error("missing mcp content count")
 	}
 }
+
+// --- syncMCP reconcile (issue #9) ---
+
+// writeMCPServers writes a .claude.json containing the given mcpServers map.
+func writeMCPServers(t *testing.T, path string, servers map[string]any) {
+	t.Helper()
+	if err := writeJSONFile(path, map[string]any{"mcpServers": servers}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// rigMCPServers reads back the mcpServers map from a rig's .claude.json.
+func rigMCPServers(t *testing.T, rigDir string) map[string]any {
+	t.Helper()
+	data, _ := readJSONFile(filepath.Join(rigDir, ".claude.json"))
+	servers, _ := data["mcpServers"].(map[string]any)
+	return servers
+}
+
+func TestSyncMCPAddsNewServers(t *testing.T) {
+	home := setupTestHome(t)
+	dir := createRigDir(t, home, "r")
+	src := filepath.Join(home, "source.json")
+	writeMCPServers(t, src, map[string]any{
+		"alpha": map[string]any{"type": "sse", "url": "https://a/sse"},
+	})
+
+	res, err := syncMCP(dir, src, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.changed || !sliceEqual(res.added, []string{"alpha"}) || !sliceEqual(res.synced, []string{"alpha"}) {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+	if _, ok := rigMCPServers(t, dir)["alpha"]; !ok {
+		t.Error("alpha not written to rig .claude.json")
+	}
+}
+
+func TestSyncMCPUpdatesOwnedWhenSourceChanges(t *testing.T) {
+	home := setupTestHome(t)
+	dir := createRigDir(t, home, "r")
+	src := filepath.Join(home, "source.json")
+
+	// Target already has the old SSE definition; it is owned (synced earlier).
+	writeMCPServers(t, filepath.Join(dir, ".claude.json"), map[string]any{
+		"callmux": map[string]any{"type": "sse", "url": "https://old/sse"},
+	})
+	// Source now defines a stdio bridge instead.
+	newCfg := map[string]any{"command": "callmux", "args": []any{"bridge", "--cwd", "."}}
+	writeMCPServers(t, src, map[string]any{"callmux": newCfg})
+
+	res, err := syncMCP(dir, src, []string{"callmux"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.changed || !sliceEqual(res.updated, []string{"callmux"}) {
+		t.Fatalf("expected callmux updated, got %+v", res)
+	}
+	got := rigMCPServers(t, dir)["callmux"].(map[string]any)
+	if got["command"] != "callmux" || got["type"] != nil {
+		t.Errorf("callmux not overwritten with new config: %+v", got)
+	}
+}
+
+func TestSyncMCPRemovesOwnedGoneFromSource(t *testing.T) {
+	home := setupTestHome(t)
+	dir := createRigDir(t, home, "r")
+	src := filepath.Join(home, "source.json")
+
+	writeMCPServers(t, filepath.Join(dir, ".claude.json"), map[string]any{
+		"gone": map[string]any{"command": "gone"},
+	})
+	writeMCPServers(t, src, map[string]any{}) // source no longer defines it
+
+	res, err := syncMCP(dir, src, []string{"gone"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.changed || !sliceEqual(res.removed, []string{"gone"}) || len(res.synced) != 0 {
+		t.Fatalf("expected gone removed, got %+v", res)
+	}
+	if _, ok := rigMCPServers(t, dir)["gone"]; ok {
+		t.Error("gone still present in rig .claude.json")
+	}
+}
+
+func TestSyncMCPLocalEntriesUntouched(t *testing.T) {
+	home := setupTestHome(t)
+	dir := createRigDir(t, home, "r")
+	src := filepath.Join(home, "source.json")
+
+	// User-local entry not in syncedMCP — must survive even if source defines the same name differently.
+	writeMCPServers(t, filepath.Join(dir, ".claude.json"), map[string]any{
+		"jetbrains": map[string]any{"command": "local-version"},
+	})
+	writeMCPServers(t, src, map[string]any{
+		"jetbrains": map[string]any{"command": "global-version"},
+	})
+
+	res, err := syncMCP(dir, src, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.changed || len(res.synced) != 0 {
+		t.Fatalf("expected no changes for local entry, got %+v", res)
+	}
+	got := rigMCPServers(t, dir)["jetbrains"].(map[string]any)
+	if got["command"] != "local-version" {
+		t.Errorf("local jetbrains was overwritten: %+v", got)
+	}
+}
+
+func TestSyncMCPNoChangeWhenIdentical(t *testing.T) {
+	home := setupTestHome(t)
+	dir := createRigDir(t, home, "r")
+	src := filepath.Join(home, "source.json")
+
+	cfg := map[string]any{"type": "sse", "url": "https://a/sse"}
+	writeMCPServers(t, filepath.Join(dir, ".claude.json"), map[string]any{"alpha": cfg})
+	writeMCPServers(t, src, map[string]any{"alpha": cfg})
+
+	res, err := syncMCP(dir, src, []string{"alpha"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.changed || len(res.added)+len(res.updated)+len(res.removed) != 0 {
+		t.Fatalf("expected no change, got %+v", res)
+	}
+	if !sliceEqual(res.synced, []string{"alpha"}) {
+		t.Errorf("synced should still own alpha, got %+v", res.synced)
+	}
+}
+
+func TestSyncMCPDryRunDoesNotWrite(t *testing.T) {
+	home := setupTestHome(t)
+	dir := createRigDir(t, home, "r")
+	src := filepath.Join(home, "source.json")
+
+	writeMCPServers(t, filepath.Join(dir, ".claude.json"), map[string]any{
+		"callmux": map[string]any{"type": "sse", "url": "https://old/sse"},
+	})
+	writeMCPServers(t, src, map[string]any{
+		"callmux": map[string]any{"command": "callmux", "args": []any{"bridge"}},
+		"new":     map[string]any{"command": "new"},
+	})
+
+	res, err := syncMCP(dir, src, []string{"callmux"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.changed || !sliceEqual(res.updated, []string{"callmux"}) || !sliceEqual(res.added, []string{"new"}) {
+		t.Fatalf("dry-run should still compute plan, got %+v", res)
+	}
+	// Nothing should have been written.
+	servers := rigMCPServers(t, dir)
+	if _, ok := servers["new"]; ok {
+		t.Error("dry-run wrote 'new' to disk")
+	}
+	cm := servers["callmux"].(map[string]any)
+	if cm["type"] != "sse" {
+		t.Errorf("dry-run mutated callmux on disk: %+v", cm)
+	}
+}
